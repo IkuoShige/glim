@@ -35,11 +35,13 @@
     // Registration error factors
     "registration_error_factor_type": "VGICP_GPU",
     "randomsampling_rate": 1.0,
-    "submap_voxel_resolution": 0.5,
+    // "submap_voxel_resolution": 0.5,// for in door
+    "submap_voxel_resolution": 1.0,// for out door
     "submap_voxelmap_levels": 2,
     "submap_voxelmap_scaling_factor": 2.0,
     "max_implicit_loop_distance": 100.0,
-    "min_implicit_loop_overlap": 0.2,
+    // "min_implicit_loop_overlap": 0.2,// up acuracy, execute speck and memory
+    "min_implicit_loop_overlap": 0.05,
     // Optimizer settings
     "use_isam2_dogleg": false,
     "isam2_relinearize_skip": 1,
