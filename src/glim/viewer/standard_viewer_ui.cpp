@@ -149,7 +149,7 @@ void StandardViewer::drawable_selection() {
           found.first->set_color_mode(guik::ColorMode::RAINBOW);
           break;
         case 1:
-          found.first->set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
+          found.first->set_color_mode(guik::ColorMode::VERTEX_COLOR);
           break;
         case 2:
           found.first->set_color_mode(guik::ColorMode::VERTEX_COLOR);

@@ -46,6 +46,15 @@ public:
   double keyframe_voxel_resolution;
   int keyframe_voxelmap_levels;
   double keyframe_voxelmap_scaling_factor;
+  double epcd_max_correspondence_distance = 1.0;
+  bool epcd_enable_exact_downsampling = true;
+  int epcd_num_threads = 4;
+  int epcd_coreset_target_num_points = 96;
+  int epcd_coreset_num_clusters = 64;
+  double epcd_deferred_sampling_translation = 0.25;
+  double epcd_deferred_sampling_rotation = 0.004363323129985824;
+  double epcd_rebuild_translation = 1.0;
+  double epcd_rebuild_rotation = 0.017453292519943295;
 
   double submap_downsample_resolution;
   double submap_voxel_resolution;

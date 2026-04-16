@@ -1,0 +1,32 @@
+{
+  "sub_mapping": {
+    "so_name": "libsub_mapping.so",
+    "enable_imu": true,
+    "enable_optimization": false,
+    "max_num_keyframes": 15,
+    "keyframe_update_strategy": "OVERLAP",
+    "keyframe_update_min_points": 500,
+    "keyframe_update_interval_rot": 3.14,
+    "keyframe_update_interval_trans": 1.0,
+    "max_keyframe_overlap": 0.6,
+    "create_between_factors": false,
+    "between_registration_type": "GICP",
+    "registration_error_factor_type": "EPCD_GICP",
+    "keyframe_randomsampling_rate": 1.0,
+    "keyframe_voxel_resolution": 0.25,
+    "keyframe_voxelmap_levels": 2,
+    "keyframe_voxelmap_scaling_factor": 2.0,
+    "epcd_max_correspondence_distance": 1.0,
+    "epcd_enable_exact_downsampling": true,
+    "epcd_num_threads": 4,
+    "epcd_coreset_target_num_points": 96,
+    "epcd_coreset_num_clusters": 64,
+    "epcd_deferred_sampling_translation": 0.25,
+    "epcd_deferred_sampling_rotation": 0.004363323129985824,
+    "epcd_rebuild_translation": 1.0,
+    "epcd_rebuild_rotation": 0.017453292519943295,
+    "submap_downsample_resolution": 0.4,
+    "submap_voxel_resolution": 1.0,
+    "submap_target_num_points": 10000
+  }
+}

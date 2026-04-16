@@ -1,0 +1,33 @@
+{
+  "global_mapping": {
+    "so_name": "libglobal_mapping.so",
+    "enable_imu": true,
+    "enable_optimization": true,
+    "init_pose_damping_scale": 1e10,
+    "create_between_factors": false,
+    "between_registration_type": "GICP",
+    "registration_error_factor_type": "EPCD_GICP",
+    "randomsampling_rate": 1.0,
+    "submap_voxel_resolution": 0.5,
+    "submap_voxel_resolution_max": 1.0,
+    "submap_voxel_resolution_dmin": 5.0,
+    "submap_voxel_resolution_dmax": 20.0,
+    "submap_voxelmap_levels": 2,
+    "submap_voxelmap_scaling_factor": 2.0,
+    "epcd_max_correspondence_distance": 1.0,
+    "epcd_enable_exact_downsampling": true,
+    "epcd_num_threads": 4,
+    "epcd_coreset_target_num_points": 96,
+    "epcd_coreset_num_clusters": 64,
+    "epcd_deferred_sampling_translation": 0.25,
+    "epcd_deferred_sampling_rotation": 0.004363323129985824,
+    "epcd_rebuild_translation": 1.0,
+    "epcd_rebuild_rotation": 0.017453292519943295,
+    "max_implicit_loop_distance": 100.0,
+    "min_implicit_loop_overlap": 0.1,
+    "matching_cost_factor_window": 3,
+    "use_isam2_dogleg": false,
+    "isam2_relinearize_skip": 3,
+    "isam2_relinearize_thresh": 0.1
+  }
+}

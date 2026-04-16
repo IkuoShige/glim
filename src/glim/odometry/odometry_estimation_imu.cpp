@@ -20,6 +20,10 @@
 #include <glim/odometry/loose_initial_state_estimation.hpp>
 #include <glim/odometry/callbacks.hpp>
 
+#ifdef GLIM_PROFILING
+#include <chrono>
+#endif
+
 #ifdef GTSAM_USE_TBB
 #include <tbb/task_arena.h>
 #endif
@@ -302,6 +306,9 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   }
 
   // Deskew and tranform points into IMU frame
+#ifdef GLIM_PROFILING
+  auto t_odom_start = std::chrono::high_resolution_clock::now();
+#endif
   auto deskewed = deskewing->deskew(T_imu_lidar, pred_imu_times, pred_imu_poses, raw_frame->stamp, raw_frame->times, raw_frame->points);
   for (auto& pt : deskewed) {
     pt = T_imu_lidar * pt;
@@ -320,16 +327,25 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   new_frame->frame = frame;
   new_frame->frame_id = FrameID::IMU;
   create_frame(new_frame);
+#ifdef GLIM_PROFILING
+  auto t_after_preprocess = std::chrono::high_resolution_clock::now();
+#endif
 
   Callbacks::on_new_frame(new_frame);
   frames.push_back(new_frame);
 
   new_factors.add(create_factors(current, imu_factor, new_values));
+#ifdef GLIM_PROFILING
+  auto t_after_factors = std::chrono::high_resolution_clock::now();
+#endif
 
   // Update smoother
   Callbacks::on_smoother_update(*smoother, new_factors, new_values, new_stamps);
   update_smoother(new_factors, new_values, new_stamps, 1);
   Callbacks::on_smoother_update_finish(*smoother);
+#ifdef GLIM_PROFILING
+  auto t_after_smoother = std::chrono::high_resolution_clock::now();
+#endif
 
   // Find out marginalized frames
   while (marginalized_cursor < current) {
@@ -347,6 +363,16 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
 
   // Update frames
   update_frames(current, new_factors);
+#ifdef GLIM_PROFILING
+  {
+    auto t_after_update = std::chrono::high_resolution_clock::now();
+    auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    logger->info("PROF odom frame={} preprocess={:.1f}ms factors={:.1f}ms smoother={:.1f}ms update={:.1f}ms total={:.1f}ms",
+      current, ms(t_odom_start, t_after_preprocess), ms(t_after_preprocess, t_after_factors),
+      ms(t_after_factors, t_after_smoother), ms(t_after_smoother, t_after_update),
+      ms(t_odom_start, t_after_update));
+  }
+#endif
 
   // Check if IMU prediction is good or not
   imu_validation->validate(

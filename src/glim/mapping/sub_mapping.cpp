@@ -2,6 +2,9 @@
 
 #include <filesystem>
 #include <spdlog/spdlog.h>
+#ifdef GLIM_PROFILING
+#include <chrono>
+#endif
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/nonlinear/LinearContainerFactor.h>
@@ -19,6 +22,10 @@
 #include <gtsam_points/cuda/cuda_stream.hpp>
 #include <gtsam_points/cuda/stream_temp_buffer_roundrobin.hpp>
 
+#include <unordered_map>
+
+#include <gtsam_points/ann/kdtree2.hpp>
+#include <glim/factors/exact_gicp_factor.hpp>
 #include <glim/util/config.hpp>
 #include <glim/util/convert_to_string.hpp>
 #include <glim/common/imu_integration.hpp>
@@ -60,6 +67,17 @@ SubMappingParams::SubMappingParams() {
   keyframe_voxel_resolution = config.param<double>("sub_mapping", "keyframe_voxel_resolution", 0.5);
   keyframe_voxelmap_levels = config.param<int>("sub_mapping", "keyframe_voxelmap_levels", 3);
   keyframe_voxelmap_scaling_factor = config.param<double>("sub_mapping", "keyframe_voxelmap_scaling_factor", 2.0);
+  if (registration_error_factor_type == "EPCD_GICP") {
+    epcd_max_correspondence_distance = config.param<double>("sub_mapping", "epcd_max_correspondence_distance", epcd_max_correspondence_distance);
+    epcd_enable_exact_downsampling = config.param<bool>("sub_mapping", "epcd_enable_exact_downsampling", epcd_enable_exact_downsampling);
+    epcd_num_threads = config.param<int>("sub_mapping", "epcd_num_threads", epcd_num_threads);
+    epcd_coreset_target_num_points = config.param<int>("sub_mapping", "epcd_coreset_target_num_points", epcd_coreset_target_num_points);
+    epcd_coreset_num_clusters = config.param<int>("sub_mapping", "epcd_coreset_num_clusters", epcd_coreset_num_clusters);
+    epcd_deferred_sampling_translation = config.param<double>("sub_mapping", "epcd_deferred_sampling_translation", epcd_deferred_sampling_translation);
+    epcd_deferred_sampling_rotation = config.param<double>("sub_mapping", "epcd_deferred_sampling_rotation", epcd_deferred_sampling_rotation);
+    epcd_rebuild_translation = config.param<double>("sub_mapping", "epcd_rebuild_translation", epcd_rebuild_translation);
+    epcd_rebuild_rotation = config.param<double>("sub_mapping", "epcd_rebuild_rotation", epcd_rebuild_rotation);
+  }
 
   submap_downsample_resolution = config.param<double>("sub_mapping", "submap_downsample_resolution", 0.25);
   submap_voxel_resolution = config.param<double>("sub_mapping", "submap_voxel_resolution", 0.5);
@@ -102,6 +120,9 @@ void SubMapping::insert_imu(const double stamp, const Eigen::Vector3d& linear_ac
 }
 
 void SubMapping::insert_frame(const EstimationFrame::ConstPtr& odom_frame_) {
+#ifdef GLIM_PROFILING
+  auto t_sub_start = std::chrono::high_resolution_clock::now();
+#endif
   logger->trace("insert_frame frame_id={} stamp={}", odom_frame_->id, odom_frame_->stamp);
   Callbacks::on_insert_frame(odom_frame_);
 
@@ -279,6 +300,7 @@ void SubMapping::insert_frame(const EstimationFrame::ConstPtr& odom_frame_) {
           "skip creation of registration error factors because keyframe has no points (keyframe[i]={}, keyframe[-1]={})",
           keyframes[i]->frame->size(),
           keyframes.back()->frame->size());
+        continue;
       }
 
       if (params.registration_error_factor_type == "VGICP") {
@@ -290,6 +312,19 @@ void SubMapping::insert_frame(const EstimationFrame::ConstPtr& odom_frame_) {
 
           graph->emplace_shared<gtsam_points::IntegratedVGICPFactor>(X(keyframe_indices[i]), X(current), voxelmap, keyframes.back()->frame);
         }
+      }
+      else if (params.registration_error_factor_type == "EPCD_GICP") {
+        // Build KdTree for target keyframe once and share across factors
+        auto target_tree = std::make_shared<gtsam_points::KdTree2<gtsam_points::PointCloud>>(keyframes[i]->frame, params.epcd_num_threads);
+        auto factor = gtsam::make_shared<ExactGICPFactor>(X(keyframe_indices[i]), X(current), keyframes[i]->frame, keyframes.back()->frame, target_tree);
+        factor->set_num_threads(params.epcd_num_threads);
+        factor->set_max_correspondence_distance(params.epcd_max_correspondence_distance);
+        factor->set_enable_exact_downsampling(params.epcd_enable_exact_downsampling);
+        factor->set_coreset_target_num_points(params.epcd_coreset_target_num_points);
+        factor->set_coreset_num_clusters(params.epcd_coreset_num_clusters);
+        factor->set_deferred_sampling_threshold(params.epcd_deferred_sampling_translation, params.epcd_deferred_sampling_rotation);
+        factor->set_rebuild_threshold(params.epcd_rebuild_translation, params.epcd_rebuild_rotation);
+        graph->add(factor);
       }
 #ifdef GTSAM_POINTS_USE_CUDA
       else if (params.registration_error_factor_type == "VGICP_GPU") {
@@ -334,6 +369,15 @@ void SubMapping::insert_frame(const EstimationFrame::ConstPtr& odom_frame_) {
     values.reset(new gtsam::Values);
     graph.reset(new gtsam::NonlinearFactorGraph);
   }
+#ifdef GLIM_PROFILING
+  {
+    auto t_sub_end = std::chrono::high_resolution_clock::now();
+    double sub_ms = std::chrono::duration<double, std::milli>(t_sub_end - t_sub_start).count();
+    if (sub_ms > 5.0) {
+      logger->info("PROF sub_mapping frame={} keyframe={} total={:.1f}ms", odom_frames.size(), insert_as_keyframe, sub_ms);
+    }
+  }
+#endif
 }
 
 void SubMapping::insert_keyframe(const int current, const EstimationFrame::ConstPtr& odom_frame) {

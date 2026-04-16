@@ -14,6 +14,7 @@ option(BUILD_WITH_CUDA_MULTIARCH "Build with GPU cross-platform support" OFF)
 option(BUILD_WITH_VIEWER "Build with visualizer" ON)
 option(BUILD_WITH_MARCH_NATIVE "Build with -march=native" OFF)
 option(BUILD_WITH_OPENCV "Build with OpenCV to support camera images" ON)
+option(BUILD_WITH_PROFILING "Build with per-frame profiling logs" OFF)
 
 if(BUILD_WITH_MARCH_NATIVE)
   add_definitions(-march=native)
@@ -74,6 +75,8 @@ add_library(glim SHARED
   src/glim/common/imu_validation.cpp
   src/glim/common/cloud_deskewing.cpp
   src/glim/common/cloud_covariance_estimation.cpp
+  # factors
+  src/glim/factors/exact_gicp_factor.cpp
   # odometry
   src/glim/odometry/callbacks.cpp
   src/glim/odometry/estimation_frame.cpp
@@ -118,7 +121,21 @@ target_link_libraries(glim
 if(BUILD_WITH_OPENCV)
   target_compile_definitions(glim PUBLIC GLIM_USE_OPENCV)
 endif()
+if(BUILD_WITH_PROFILING)
+  target_compile_definitions(glim PUBLIC GLIM_PROFILING)
+endif()
 list(APPEND glim_LIBRARIES glim)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(test_exact_gicp_factor
+    test/test_exact_gicp_factor.cpp
+  )
+  target_link_libraries(test_exact_gicp_factor
+    glim
+  )
+  add_test(NAME test_exact_gicp_factor COMMAND test_exact_gicp_factor)
+endif()
 
 # Create shared libraries for estimation modules
 list(APPEND module_srcs

@@ -3,7 +3,13 @@
 #include <any>
 #include <memory>
 #include <random>
+#include <unordered_map>
 #include <glim/mapping/global_mapping_base.hpp>
+
+namespace gtsam_points {
+struct NearestNeighborSearch;
+class FastOccupancyGrid;
+}  // namespace gtsam_points
 
 namespace gtsam {
 class Values;
@@ -42,10 +48,20 @@ public:
   double submap_voxel_resolution_dmax;
   int submap_voxelmap_levels;
   double submap_voxelmap_scaling_factor;
+  double epcd_max_correspondence_distance = 1.0;
+  bool epcd_enable_exact_downsampling = true;
+  int epcd_num_threads = 4;
+  int epcd_coreset_target_num_points = 96;
+  int epcd_coreset_num_clusters = 64;
+  double epcd_deferred_sampling_translation = 0.25;
+  double epcd_deferred_sampling_rotation = 0.004363323129985824;
+  double epcd_rebuild_translation = 1.0;
+  double epcd_rebuild_rotation = 0.017453292519943295;
 
   double randomsampling_rate;
   double max_implicit_loop_distance;
   double min_implicit_loop_overlap;
+  int matching_cost_factor_window;  // submap index distance threshold; pairs beyond this use BetweenFactor (-1 = unlimited)
 
   bool use_isam2_dogleg;
   double isam2_relinearize_skip;
@@ -82,6 +98,7 @@ private:
 
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_between_factors(int current) const;
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_matching_cost_factors(int current) const;
+  std::shared_ptr<gtsam::NonlinearFactorGraph> align_and_create_between_factor(int i, int j) const;
 
   void update_submaps();
   gtsam_points::ISAM2ResultExt update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values);
@@ -101,6 +118,8 @@ private:
 
   std::vector<SubMap::Ptr> submaps;
   std::vector<gtsam_points::PointCloud::ConstPtr> subsampled_submaps;
+  mutable std::unordered_map<int, std::shared_ptr<const gtsam_points::NearestNeighborSearch>> kdtree_cache_;
+  std::vector<std::shared_ptr<gtsam_points::FastOccupancyGrid>> occ_grids_;
 
   std::unique_ptr<gtsam::Values> new_values;
   std::unique_ptr<gtsam::NonlinearFactorGraph> new_factors;

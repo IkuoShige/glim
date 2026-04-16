@@ -1,5 +1,7 @@
 #include <glim/viewer/standard_viewer.hpp>
 
+#include <algorithm>
+
 #include <spdlog/spdlog.h>
 
 #include <gtsam/inference/Symbol.h>
@@ -37,6 +39,19 @@
 #include <glim/viewer/standard_viewer_mem.hpp>
 
 namespace glim {
+namespace {
+
+void add_intensity_colormap(const glk::PointCloudBuffer::Ptr& cloud_buffer, const std::vector<float>& intensities) {
+  if (intensities.empty()) {
+    return;
+  }
+
+  const auto max_itr = std::max_element(intensities.begin(), intensities.end());
+  const float scale = max_itr != intensities.end() && *max_itr > 0.0f ? 1.0f / *max_itr : 1.0f;
+  cloud_buffer->add_intensity(glk::COLORMAP::TURBO, intensities, scale);
+}
+
+}  // namespace
 
 void StandardViewer::set_callbacks() {
   using std::placeholders::_1;
@@ -95,7 +110,7 @@ void StandardViewer::set_callbacks() {
           intensity_dist.add(intensity);
         }
 
-        cloud_buffer->add_colormap(intensities);
+        add_intensity_colormap(cloud_buffer, intensities);
       }
 
       last_id = new_frame->id;
@@ -128,8 +143,8 @@ void StandardViewer::set_callbacks() {
         case 0:  // FLAT
           break;
         case 1:  // INTENSITY
-          shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
-          shader_setting_rainbow.set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
+          shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLOR);
+          shader_setting_rainbow.set_color_mode(guik::ColorMode::VERTEX_COLOR);
           break;
         case 2:  // NORMAL
           if (new_frame->frame->normals) {
@@ -141,8 +156,8 @@ void StandardViewer::set_callbacks() {
             cloud_buffer->add_color(normals);
           }
 
-          shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
-          shader_setting_rainbow.set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
+          shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLOR);
+          shader_setting_rainbow.set_color_mode(guik::ColorMode::VERTEX_COLOR);
           break;
       }
 
@@ -187,7 +202,7 @@ void StandardViewer::set_callbacks() {
           auto cloud_buffer = std::make_shared<glk::PointCloudBuffer>(keyframe->frame->points, keyframe->frame->size());
           if (keyframe->frame->has_intensities()) {
             std::vector<float> intensities(keyframe->frame->intensities, keyframe->frame->intensities + keyframe->frame->size());
-            cloud_buffer->add_colormap(intensities);
+            add_intensity_colormap(cloud_buffer, intensities);
           }
 
           guik::Rainbow shader_setting(pose);
@@ -195,7 +210,7 @@ void StandardViewer::set_callbacks() {
             case 0:  // FLAT
               break;
             case 1:  // INTENSITY
-              shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
+              shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLOR);
               break;
             case 2:  // NORMAL
               break;
@@ -208,7 +223,7 @@ void StandardViewer::set_callbacks() {
               drawable.first->set_color_mode(guik::ColorMode::RAINBOW);
               break;
             case 1:
-              drawable.first->set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
+              drawable.first->set_color_mode(guik::ColorMode::VERTEX_COLOR);
               break;
             case 2:
               drawable.first->set_color_mode(guik::ColorMode::RAINBOW);
@@ -388,7 +403,7 @@ void StandardViewer::set_callbacks() {
       const auto cloud_buffer = std::make_shared<glk::PointCloudBuffer>(frame->points, frame->size());
       if (frame->has_intensities()) {
         std::vector<float> intensities(frame->intensities, frame->intensities + frame->size());
-        cloud_buffer->add_colormap(intensities);
+        add_intensity_colormap(cloud_buffer, intensities);
       }
 
       guik::FlatColor shader_setting(color);
@@ -487,7 +502,7 @@ void StandardViewer::set_callbacks() {
       auto cloud_buffer = std::make_shared<glk::PointCloudBuffer>(submap->frame->points, submap->frame->size());
       if (submap->frame->has_intensities()) {
         std::vector<float> intensities(submap->frame->intensities, submap->frame->intensities + submap->frame->size());
-        cloud_buffer->add_colormap(intensities);
+        add_intensity_colormap(cloud_buffer, intensities);
       }
 
       auto shader_setting = guik::Rainbow(T_world_origin->matrix().cast<float>());
@@ -496,7 +511,7 @@ void StandardViewer::set_callbacks() {
           shader_setting.set_color_mode(guik::ColorMode::RAINBOW);
           break;
         case 1:  // INTENSITY
-          shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLORMAP);
+          shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLOR);
           break;
         case 2:  // COLOR
           shader_setting.set_color_mode(guik::ColorMode::VERTEX_COLOR);
