@@ -286,12 +286,7 @@ void GlobalMapping::insert_submap(int current, const SubMap::Ptr& submap) {
     }
   }
 
-  // Build FastOccupancyGrid for bit-packed overlap estimation (paper Sec. III-B)
-  const double occ_resolution = base_resolution * std::pow(params.submap_voxelmap_scaling_factor, params.submap_voxelmap_levels - 1);
-  auto occ_grid = std::make_shared<gtsam_points::FastOccupancyGrid>(occ_resolution);
-  occ_grid->insert(*subsampled_submap);
-  occ_grids_.push_back(occ_grid);
-
+  occ_grids_.push_back(create_occupancy_grid(*subsampled_submap, base_resolution));
   submaps.push_back(submap);
   subsampled_submaps.push_back(subsampled_submap);
 }
@@ -333,9 +328,7 @@ void GlobalMapping::find_overlapping_submaps(double min_overlap) {
         continue;
       }
 
-      const double overlap = (i < static_cast<int>(occ_grids_.size()))
-        ? occ_grids_[i]->calc_overlap_rate(*subsampled_submaps[j], delta)
-        : gtsam_points::overlap_auto(submaps[i]->voxelmaps.back(), subsampled_submaps[j], delta);
+      const double overlap = occ_grids_[i]->calc_overlap_rate(*subsampled_submaps[j], delta);
       if (overlap < min_overlap) {
         continue;
       }
@@ -452,6 +445,14 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_between_facto
   return factors;
 }
 
+// Bit-packed occupancy grid at the coarsest voxelmap resolution for fast overlap estimation (paper Sec. III-B)
+std::shared_ptr<gtsam_points::FastOccupancyGrid> GlobalMapping::create_occupancy_grid(const gtsam_points::PointCloud& points, double base_resolution) const {
+  const double resolution = base_resolution * std::pow(params.submap_voxelmap_scaling_factor, params.submap_voxelmap_levels - 1);
+  auto occ_grid = std::make_shared<gtsam_points::FastOccupancyGrid>(resolution);
+  occ_grid->insert(points);
+  return occ_grid;
+}
+
 gtsam::NonlinearFactor::shared_ptr GlobalMapping::create_epcd_factor(int target, int source) const {
   auto& target_tree = kdtree_cache_[target];
   if (!target_tree) {
@@ -527,9 +528,7 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost
     }
 
     const Eigen::Isometry3d delta = submaps[i]->T_world_origin.inverse() * current_submap->T_world_origin;
-    const double overlap = (i < static_cast<int>(occ_grids_.size()))
-      ? occ_grids_[i]->calc_overlap_rate(*current_submap->frame, delta)
-      : gtsam_points::overlap_auto(submaps[i]->voxelmaps.back(), current_submap->frame, delta);
+    const double overlap = occ_grids_[i]->calc_overlap_rate(*current_submap->frame, delta);
 
     previous_overlap = i == current - 1 ? overlap : previous_overlap;
     if (overlap < params.min_implicit_loop_overlap) {
@@ -834,6 +833,7 @@ bool GlobalMapping::load(const std::string& path) {
     submaps.push_back(submap);
     submaps.back()->voxelmaps.clear();
     subsampled_submaps.push_back(subsampled_submap);
+    occ_grids_.push_back(create_occupancy_grid(*subsampled_submap, base_resolution));
 
     if (params.enable_gpu) {
 #ifdef GTSAM_POINTS_USE_CUDA
@@ -964,6 +964,8 @@ bool GlobalMapping::load(const std::string& path) {
           graph.emplace_shared<gtsam_points::IntegratedVGICPFactor>(X(first), X(second), voxelmap, subsampled_submaps[second]);
         }
       }
+    } else if (type == "epcd_gicp") {
+      graph.add(create_epcd_factor(first, second));
     } else {
       logger->warn("unsupported matching cost factor type ({})", type);
     }

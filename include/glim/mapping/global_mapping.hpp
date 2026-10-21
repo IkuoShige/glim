@@ -92,6 +92,7 @@ private:
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_between_factors(int current) const;
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_matching_cost_factors(int current) const;
   std::shared_ptr<gtsam::NonlinearFactorGraph> align_and_create_between_factor(int i, int j) const;
+  std::shared_ptr<gtsam_points::FastOccupancyGrid> create_occupancy_grid(const gtsam_points::PointCloud& points, double base_resolution) const;
   gtsam::NonlinearFactor::shared_ptr create_epcd_factor(int target, int source) const;
 
   void update_submaps();
