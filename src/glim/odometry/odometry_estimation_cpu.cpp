@@ -79,14 +79,8 @@ OdometryEstimationCPUParams::OdometryEstimationCPUParams() : OdometryEstimationI
   epcd_keyframe_max_overlap = config.param<double>("odometry_estimation", "epcd_keyframe_max_overlap", 0.9);
   epcd_keyframe_delta_trans = config.param<double>("odometry_estimation", "epcd_keyframe_delta_trans", 1.0);
   epcd_keyframe_delta_rot = config.param<double>("odometry_estimation", "epcd_keyframe_delta_rot", 0.25);
-  epcd_max_correspondence_distance = config.param<double>("odometry_estimation", "epcd_max_correspondence_distance", 1.0);
-  epcd_enable_exact_downsampling = config.param<bool>("odometry_estimation", "epcd_enable_exact_downsampling", true);
-  epcd_coreset_target_num_points = config.param<int>("odometry_estimation", "epcd_coreset_target_num_points", 96);
-  epcd_coreset_num_clusters = config.param<int>("odometry_estimation", "epcd_coreset_num_clusters", 64);
-  epcd_deferred_sampling_translation = config.param<double>("odometry_estimation", "epcd_deferred_sampling_translation", 0.25);
-  epcd_deferred_sampling_rotation = config.param<double>("odometry_estimation", "epcd_deferred_sampling_rotation", 0.25 * M_PI / 180.0);
-  epcd_rebuild_translation = config.param<double>("odometry_estimation", "epcd_rebuild_translation", 1.0);
-  epcd_rebuild_rotation = config.param<double>("odometry_estimation", "epcd_rebuild_rotation", 1.0 * M_PI / 180.0);
+  epcd = ExactGICPFactorParams::load(config, "odometry_estimation");
+  epcd.num_threads = num_threads;
 }
 
 OdometryEstimationCPUParams::~OdometryEstimationCPUParams() {}
@@ -151,16 +145,6 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
       return gtsam::NonlinearFactorGraph();
     }
 
-    const auto configure_factor = [params](const std::shared_ptr<ExactGICPFactor>& factor) {
-      factor->set_num_threads(params->num_threads);
-      factor->set_max_correspondence_distance(params->epcd_max_correspondence_distance);
-      factor->set_enable_exact_downsampling(params->epcd_enable_exact_downsampling);
-      factor->set_coreset_target_num_points(params->epcd_coreset_target_num_points);
-      factor->set_coreset_num_clusters(params->epcd_coreset_num_clusters);
-      factor->set_deferred_sampling_threshold(params->epcd_deferred_sampling_translation, params->epcd_deferred_sampling_rotation);
-      factor->set_rebuild_threshold(params->epcd_rebuild_translation, params->epcd_rebuild_rotation);
-    };
-
     // Cache KdTrees per target point cloud to avoid redundant O(n log n) builds
     std::unordered_map<const gtsam_points::PointCloud*, std::shared_ptr<const gtsam_points::NearestNeighborSearch>> kdtree_cache;
     const auto get_or_build_kdtree = [&](const gtsam_points::PointCloud::ConstPtr& cloud) -> std::shared_ptr<const gtsam_points::NearestNeighborSearch> {
@@ -180,7 +164,7 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
 
       auto target_tree = get_or_build_kdtree(target->frame);
       auto factor = gtsam::make_shared<ExactGICPFactor>(target_key, source_key, target->frame, source->frame, target_tree);
-      configure_factor(factor);
+      factor->set_params(params->epcd);
       factors.add(factor);
     };
 
@@ -191,7 +175,7 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
 
       auto target_tree = get_or_build_kdtree(target->frame);
       auto factor = gtsam::make_shared<ExactGICPFactor>(fixed_target_pose, source_key, target->frame, source->frame, target_tree);
-      configure_factor(factor);
+      factor->set_params(params->epcd);
       factors.add(factor);
     };
 
@@ -338,6 +322,21 @@ void OdometryEstimationCPU::update_frames(const int current, const gtsam::Nonlin
   Callbacks::on_update_keyframes(keyframes);
 }
 
+namespace {
+
+// Overlap rate using the bit-packed occupancy grid built in create_frame()
+double fast_overlap(const EstimationFrame::ConstPtr& target, const gtsam_points::PointCloud::ConstPtr& source, const Eigen::Isometry3d& delta) {
+  if (const auto occ = target->get_custom_data<gtsam_points::FastOccupancyGrid>("occ_grid")) {
+    return occ->calc_overlap_rate(*source, delta);
+  }
+  if (!target->voxelmaps.empty()) {
+    return gtsam_points::overlap_auto(target->voxelmaps.back(), source, delta);
+  }
+  return 0.0;
+}
+
+}  // namespace
+
 void OdometryEstimationCPU::update_keyframes_overlap(int current) {
   const auto params = static_cast<const OdometryEstimationCPUParams*>(this->params.get());
 
@@ -349,19 +348,6 @@ void OdometryEstimationCPU::update_keyframes_overlap(int current) {
     keyframes.push_back(frames[current]);
     return;
   }
-
-  // Helper: get or fallback overlap using FastOccupancyGrid (bit-packed, cache-friendly)
-  const auto fast_overlap = [](const EstimationFrame::ConstPtr& target, const gtsam_points::PointCloud::ConstPtr& source, const Eigen::Isometry3d& delta) -> double {
-    auto occ = target->get_custom_data<gtsam_points::FastOccupancyGrid>("occ_grid");
-    if (occ) {
-      return occ->calc_overlap_rate(*source, delta);
-    }
-    // Fallback to voxelmap
-    if (!target->voxelmaps.empty()) {
-      return gtsam_points::overlap_auto(target->voxelmaps.back(), source, delta);
-    }
-    return 0.0;
-  };
 
   // Helper: union overlap against multiple targets
   const auto fast_overlap_multi = [](const std::vector<EstimationFrame::ConstPtr>& targets, const gtsam_points::PointCloud::ConstPtr& source, const std::vector<Eigen::Isometry3d>& deltas) -> double {
@@ -474,22 +460,10 @@ void OdometryEstimationCPU::update_keyframes_displacement(int current) {
     return;
   }
 
-  // Helper: get or fallback overlap using FastOccupancyGrid
-  const auto fast_overlap_disp = [](const EstimationFrame::ConstPtr& target, const gtsam_points::PointCloud::ConstPtr& source, const Eigen::Isometry3d& delta) -> double {
-    auto occ = target->get_custom_data<gtsam_points::FastOccupancyGrid>("occ_grid");
-    if (occ) {
-      return occ->calc_overlap_rate(*source, delta);
-    }
-    if (!target->voxelmaps.empty()) {
-      return gtsam_points::overlap_auto(target->voxelmaps.back(), source, delta);
-    }
-    return 0.0;
-  };
-
   std::vector<EstimationFrame::ConstPtr> marginalized_keyframes;
   for (int i = 0; i < static_cast<int>(keyframes.size()) - 1; i++) {
     const Eigen::Isometry3d delta = keyframes[i]->T_world_imu.inverse() * new_keyframe->T_world_imu;
-    const double overlap = fast_overlap_disp(keyframes[i], new_keyframe->frame, delta);
+    const double overlap = fast_overlap(keyframes[i], new_keyframe->frame, delta);
     if (overlap < 0.01) {
       marginalized_keyframes.push_back(keyframes[i]);
       keyframes.erase(keyframes.begin() + i);

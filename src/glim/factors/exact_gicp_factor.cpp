@@ -14,6 +14,7 @@
 #include <gtsam_points/ann/kdtree2.hpp>
 #include <gtsam_points/ann/nearest_neighbor_search.hpp>
 #include <gtsam_points/types/frame_traits.hpp>
+#include <glim/util/config.hpp>
 
 namespace glim {
 
@@ -261,26 +262,11 @@ ExactGICPFactor::ExactGICPFactor(
   const gtsam_points::PointCloud::ConstPtr& source,
   const std::shared_ptr<const gtsam_points::NearestNeighborSearch>& target_tree)
 : gtsam_points::IntegratedMatchingCostFactor(target_key, source_key),
-  num_threads(1),
-  max_correspondence_distance_sq(1.0),
-  enable_exact_downsampling(true),
-  coreset_target_num_points(96),
-  coreset_num_clusters(64),
-  deferred_sampling_translation(0.25),
-  deferred_sampling_rotation(0.25 * M_PI / 180.0),
-  rebuild_translation(1.0),
-  rebuild_rotation(1.0 * M_PI / 180.0),
   target(target),
   source(source),
   target_tree(target_tree),
-  coreset_cache(new CoresetCache),
-  last_num_inliers(0),
-  last_num_evaluated(0) {
-  if (!this->target || !this->source || !this->target->has_points() || !this->source->has_points() || !this->target->has_covs() || !this->source->has_covs()) {
-    std::cerr << "error: ExactGICPFactor requires target/source points and covariances" << std::endl;
-    abort();
-  }
-
+  coreset_cache(new CoresetCache) {
+  validate_inputs();
 }
 
 ExactGICPFactor::ExactGICPFactor(
@@ -290,26 +276,11 @@ ExactGICPFactor::ExactGICPFactor(
   const gtsam_points::PointCloud::ConstPtr& source,
   const std::shared_ptr<const gtsam_points::NearestNeighborSearch>& target_tree)
 : gtsam_points::IntegratedMatchingCostFactor(fixed_target_pose, source_key),
-  num_threads(1),
-  max_correspondence_distance_sq(1.0),
-  enable_exact_downsampling(true),
-  coreset_target_num_points(96),
-  coreset_num_clusters(64),
-  deferred_sampling_translation(0.25),
-  deferred_sampling_rotation(0.25 * M_PI / 180.0),
-  rebuild_translation(1.0),
-  rebuild_rotation(1.0 * M_PI / 180.0),
   target(target),
   source(source),
   target_tree(target_tree),
-  coreset_cache(new CoresetCache),
-  last_num_inliers(0),
-  last_num_evaluated(0) {
-  if (!this->target || !this->source || !this->target->has_points() || !this->source->has_points() || !this->target->has_covs() || !this->source->has_covs()) {
-    std::cerr << "error: ExactGICPFactor requires target/source points and covariances" << std::endl;
-    abort();
-  }
-
+  coreset_cache(new CoresetCache) {
+  validate_inputs();
 }
 
 ExactGICPFactor::ExactGICPFactor(const ExactGICPFactor& other)
@@ -331,6 +302,36 @@ ExactGICPFactor::ExactGICPFactor(const ExactGICPFactor& other)
   last_num_evaluated(other.last_num_evaluated) {}
 
 ExactGICPFactor::~ExactGICPFactor() {}
+
+ExactGICPFactorParams ExactGICPFactorParams::load(const Config& config, const std::string& module) {
+  ExactGICPFactorParams params;
+  params.max_correspondence_distance = config.param<double>(module, "epcd_max_correspondence_distance", params.max_correspondence_distance);
+  params.enable_exact_downsampling = config.param<bool>(module, "epcd_enable_exact_downsampling", params.enable_exact_downsampling);
+  params.coreset_target_num_points = config.param<int>(module, "epcd_coreset_target_num_points", params.coreset_target_num_points);
+  params.coreset_num_clusters = config.param<int>(module, "epcd_coreset_num_clusters", params.coreset_num_clusters);
+  params.deferred_sampling_translation = config.param<double>(module, "epcd_deferred_sampling_translation", params.deferred_sampling_translation);
+  params.deferred_sampling_rotation = config.param<double>(module, "epcd_deferred_sampling_rotation", params.deferred_sampling_rotation);
+  params.rebuild_translation = config.param<double>(module, "epcd_rebuild_translation", params.rebuild_translation);
+  params.rebuild_rotation = config.param<double>(module, "epcd_rebuild_rotation", params.rebuild_rotation);
+  return params;
+}
+
+void ExactGICPFactor::set_params(const ExactGICPFactorParams& params) {
+  set_num_threads(params.num_threads);
+  set_max_correspondence_distance(params.max_correspondence_distance);
+  set_enable_exact_downsampling(params.enable_exact_downsampling);
+  set_coreset_target_num_points(params.coreset_target_num_points);
+  set_coreset_num_clusters(params.coreset_num_clusters);
+  set_deferred_sampling_threshold(params.deferred_sampling_translation, params.deferred_sampling_rotation);
+  set_rebuild_threshold(params.rebuild_translation, params.rebuild_rotation);
+}
+
+void ExactGICPFactor::validate_inputs() const {
+  if (!target || !source || !target->has_points() || !source->has_points() || !target->has_covs() || !source->has_covs()) {
+    std::cerr << "error: ExactGICPFactor requires target/source points and covariances" << std::endl;
+    abort();
+  }
+}
 
 void ExactGICPFactor::print(const std::string& s, const gtsam::KeyFormatter& keyFormatter) const {
   std::cout << s << "ExactGICPFactor";

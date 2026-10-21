@@ -3,9 +3,6 @@
 #include <map>
 #include <unordered_set>
 #include <spdlog/spdlog.h>
-#ifdef GLIM_PROFILING
-#include <chrono>
-#endif
 #include <boost/filesystem.hpp>
 
 #include <gtsam/base/serialization.h>
@@ -70,15 +67,8 @@ GlobalMappingParams::GlobalMappingParams() {
   submap_voxelmap_levels = config.param<int>("global_mapping", "submap_voxelmap_levels", 2);
   submap_voxelmap_scaling_factor = config.param<double>("global_mapping", "submap_voxelmap_scaling_factor", 2.0);
   if (registration_error_factor_type == "EPCD_GICP") {
-    epcd_max_correspondence_distance = config.param<double>("global_mapping", "epcd_max_correspondence_distance", epcd_max_correspondence_distance);
-    epcd_enable_exact_downsampling = config.param<bool>("global_mapping", "epcd_enable_exact_downsampling", epcd_enable_exact_downsampling);
-    epcd_num_threads = config.param<int>("global_mapping", "epcd_num_threads", epcd_num_threads);
-    epcd_coreset_target_num_points = config.param<int>("global_mapping", "epcd_coreset_target_num_points", epcd_coreset_target_num_points);
-    epcd_coreset_num_clusters = config.param<int>("global_mapping", "epcd_coreset_num_clusters", epcd_coreset_num_clusters);
-    epcd_deferred_sampling_translation = config.param<double>("global_mapping", "epcd_deferred_sampling_translation", epcd_deferred_sampling_translation);
-    epcd_deferred_sampling_rotation = config.param<double>("global_mapping", "epcd_deferred_sampling_rotation", epcd_deferred_sampling_rotation);
-    epcd_rebuild_translation = config.param<double>("global_mapping", "epcd_rebuild_translation", epcd_rebuild_translation);
-    epcd_rebuild_rotation = config.param<double>("global_mapping", "epcd_rebuild_rotation", epcd_rebuild_rotation);
+    epcd = ExactGICPFactorParams::load(config, "global_mapping");
+    epcd.num_threads = config.param<int>("global_mapping", "epcd_num_threads", epcd.num_threads);
   }
 
   randomsampling_rate = config.param<double>("global_mapping", "randomsampling_rate", 1.0);
@@ -143,9 +133,6 @@ void GlobalMapping::insert_imu(const double stamp, const Eigen::Vector3d& linear
 }
 
 void GlobalMapping::insert_submap(const SubMap::Ptr& submap) {
-#ifdef GLIM_PROFILING
-  auto t_gm_start = std::chrono::high_resolution_clock::now();
-#endif
   logger->debug("insert_submap id={} |frame|={}", submap->id, submap->frame->size());
 
   const int current = submaps.size();
@@ -179,18 +166,12 @@ void GlobalMapping::insert_submap(const SubMap::Ptr& submap) {
 
   submap->drop_frame_points();
 
-#ifdef GLIM_PROFILING
-  auto t_gm_after_setup = std::chrono::high_resolution_clock::now();
-#endif
   if (current == 0) {
     new_factors->emplace_shared<gtsam_points::LinearDampingFactor>(X(0), 6, params.init_pose_damping_scale);
   } else {
     new_factors->add(*create_between_factors(current));
     new_factors->add(*create_matching_cost_factors(current));
   }
-#ifdef GLIM_PROFILING
-  auto t_gm_after_factors = std::chrono::high_resolution_clock::now();
-#endif
 
   if (params.enable_imu) {
     logger->debug("create IMU factor");
@@ -250,24 +231,11 @@ void GlobalMapping::insert_submap(const SubMap::Ptr& submap) {
   Callbacks::on_smoother_update(*isam2, *new_factors, *new_values);
   auto result = update_isam2(*new_factors, *new_values);
   Callbacks::on_smoother_update_result(*isam2, result);
-#ifdef GLIM_PROFILING
-  auto t_gm_after_isam2 = std::chrono::high_resolution_clock::now();
-#endif
 
   new_values.reset(new gtsam::Values);
   new_factors.reset(new gtsam::NonlinearFactorGraph);
 
   update_submaps();
-#ifdef GLIM_PROFILING
-  {
-    auto t_gm_end = std::chrono::high_resolution_clock::now();
-    auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-    logger->info("PROF global_mapping submap={} setup={:.1f}ms factors={:.1f}ms isam2={:.1f}ms update={:.1f}ms total={:.1f}ms |graph|={}",
-      current, ms(t_gm_start, t_gm_after_setup), ms(t_gm_after_setup, t_gm_after_factors),
-      ms(t_gm_after_factors, t_gm_after_isam2), ms(t_gm_after_isam2, t_gm_end),
-      ms(t_gm_start, t_gm_end), isam2->getFactorsUnsafe().size());
-  }
-#endif
   Callbacks::on_update_submaps(submaps);
 }
 
@@ -333,16 +301,6 @@ void GlobalMapping::find_overlapping_submaps(double min_overlap) {
     return;
   }
 
-  const auto configure_epcd_factor = [this](const std::shared_ptr<ExactGICPFactor>& factor) {
-    factor->set_num_threads(params.epcd_num_threads);
-    factor->set_max_correspondence_distance(params.epcd_max_correspondence_distance);
-    factor->set_enable_exact_downsampling(params.epcd_enable_exact_downsampling);
-    factor->set_coreset_target_num_points(params.epcd_coreset_target_num_points);
-    factor->set_coreset_num_clusters(params.epcd_coreset_num_clusters);
-    factor->set_deferred_sampling_threshold(params.epcd_deferred_sampling_translation, params.epcd_deferred_sampling_rotation);
-    factor->set_rebuild_threshold(params.epcd_rebuild_translation, params.epcd_rebuild_rotation);
-  };
-
   // Between factors are Vector2i actually. A bad use of Vector3i
   std::unordered_set<Eigen::Vector3i, gtsam_points::Vector3iHash> existing_factors;
   for (const auto& factor : isam2->getFactorsUnsafe()) {
@@ -391,13 +349,7 @@ void GlobalMapping::find_overlapping_submaps(double min_overlap) {
       }
 
       if (params.registration_error_factor_type == "EPCD_GICP") {
-        // Share KdTree for target submap across factors
-        if (!kdtree_cache_.count(i)) {
-          kdtree_cache_[i] = std::make_shared<gtsam_points::KdTree2<gtsam_points::PointCloud>>(subsampled_submaps[i], params.epcd_num_threads);
-        }
-        auto factor = gtsam::make_shared<ExactGICPFactor>(X(i), X(j), subsampled_submaps[i], subsampled_submaps[j], kdtree_cache_[i]);
-        configure_epcd_factor(factor);
-        new_factors->add(factor);
+        new_factors->add(create_epcd_factor(i, j));
       }
 #ifdef GTSAM_POINTS_USE_CUDA
       else if (std::dynamic_pointer_cast<gtsam_points::GaussianVoxelMapGPU>(submaps[i]->voxelmaps.back()) && subsampled_submaps[j]->points_gpu) {
@@ -500,6 +452,16 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_between_facto
   return factors;
 }
 
+gtsam::NonlinearFactor::shared_ptr GlobalMapping::create_epcd_factor(int target, int source) const {
+  auto& target_tree = kdtree_cache_[target];
+  if (!target_tree) {
+    target_tree = std::make_shared<gtsam_points::KdTree2<gtsam_points::PointCloud>>(subsampled_submaps[target], params.epcd.num_threads);
+  }
+  auto factor = gtsam::make_shared<ExactGICPFactor>(X(target), X(source), subsampled_submaps[target], subsampled_submaps[source], target_tree);
+  factor->set_params(params.epcd);
+  return factor;
+}
+
 std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::align_and_create_between_factor(int i, int j) const {
   auto result = std::make_shared<gtsam::NonlinearFactorGraph>();
 
@@ -513,7 +475,7 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::align_and_create_bet
   graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), gtsam::Pose3::Identity(), gtsam::noiseModel::Isotropic::Precision(6, 1e6));
 
   auto factor = gtsam::make_shared<gtsam_points::IntegratedGICPFactor>(X(0), X(1), submaps[i]->frame, submaps[j]->frame);
-  factor->set_max_correspondence_distance(params.epcd_max_correspondence_distance);
+  factor->set_max_correspondence_distance(params.epcd.max_correspondence_distance);
   factor->set_num_threads(2);
   graph.add(factor);
 
@@ -553,16 +515,6 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost
     return factors;
   }
 
-  const auto configure_epcd_factor = [this](const std::shared_ptr<ExactGICPFactor>& factor) {
-    factor->set_num_threads(params.epcd_num_threads);
-    factor->set_max_correspondence_distance(params.epcd_max_correspondence_distance);
-    factor->set_enable_exact_downsampling(params.epcd_enable_exact_downsampling);
-    factor->set_coreset_target_num_points(params.epcd_coreset_target_num_points);
-    factor->set_coreset_num_clusters(params.epcd_coreset_num_clusters);
-    factor->set_deferred_sampling_threshold(params.epcd_deferred_sampling_translation, params.epcd_deferred_sampling_rotation);
-    factor->set_rebuild_threshold(params.epcd_rebuild_translation, params.epcd_rebuild_rotation);
-  };
-
   const auto& current_submap = submaps.back();
 
   double previous_overlap = 0.0;
@@ -598,13 +550,7 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost
       }
     }
     else if (params.registration_error_factor_type == "EPCD_GICP") {
-      // Share KdTree for target submap across factors
-      if (!kdtree_cache_.count(i)) {
-        kdtree_cache_[i] = std::make_shared<gtsam_points::KdTree2<gtsam_points::PointCloud>>(subsampled_submaps[i], params.epcd_num_threads);
-      }
-      auto factor = gtsam::make_shared<ExactGICPFactor>(X(i), X(current), subsampled_submaps[i], subsampled_submaps[current], kdtree_cache_[i]);
-      configure_epcd_factor(factor);
-      factors->add(factor);
+      factors->add(create_epcd_factor(i, current));
     }
 #ifdef GTSAM_POINTS_USE_CUDA
     else if (params.registration_error_factor_type == "VGICP_GPU") {

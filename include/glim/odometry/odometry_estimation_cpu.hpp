@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glim/factors/exact_gicp_factor.hpp>
 #include <glim/odometry/odometry_estimation_imu.hpp>
 
 namespace gtsam_points {
@@ -52,14 +53,7 @@ public:
   double epcd_keyframe_max_overlap;
   double epcd_keyframe_delta_trans;
   double epcd_keyframe_delta_rot;
-  double epcd_max_correspondence_distance;
-  bool epcd_enable_exact_downsampling;
-  int epcd_coreset_target_num_points;
-  int epcd_coreset_num_clusters;
-  double epcd_deferred_sampling_translation;
-  double epcd_deferred_sampling_rotation;
-  double epcd_rebuild_translation;
-  double epcd_rebuild_rotation;
+  ExactGICPFactorParams epcd;  ///< EPCD factor params (num_threads follows the odometry num_threads)
 };
 
 /**

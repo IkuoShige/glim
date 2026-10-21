@@ -19,7 +19,6 @@ option(BUILD_WITH_CUDA_MULTIARCH "Build with GPU cross-platform support" OFF)
 option(BUILD_WITH_VIEWER "Build with visualizer" ON)
 option(BUILD_WITH_MARCH_NATIVE "Build with -march=native" OFF)
 option(BUILD_WITH_OPENCV "Build with OpenCV to support camera images" ON)
-option(BUILD_WITH_PROFILING "Build with per-frame profiling logs" OFF)
 
 if(BUILD_WITH_MARCH_NATIVE)
   add_definitions(-march=native)
@@ -129,9 +128,6 @@ target_link_libraries(glim
 )
 if(BUILD_WITH_OPENCV)
   target_compile_definitions(glim PUBLIC GLIM_USE_OPENCV)
-endif()
-if(BUILD_WITH_PROFILING)
-  target_compile_definitions(glim PUBLIC GLIM_PROFILING)
 endif()
 list(APPEND glim_LIBRARIES glim)
 
