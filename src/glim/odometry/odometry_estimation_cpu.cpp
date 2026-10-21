@@ -134,6 +134,7 @@ void OdometryEstimationCPU::create_frame(EstimationFrame::Ptr& new_frame) {
   auto occ_grid = std::make_shared<gtsam_points::FastOccupancyGrid>(occ_resolution);
   occ_grid->insert(*new_frame->frame);
   new_frame->custom_data["occ_grid"] = occ_grid;
+  new_frame->custom_data["occ_resolution"] = std::make_shared<double>(occ_resolution);
 }
 
 gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int current, const gtsam_points::shared_ptr<gtsam::ImuFactor>& imu_factor, gtsam::Values& new_values) {
@@ -182,7 +183,7 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
     gtsam::NonlinearFactorGraph factors;
 
     for (int target = current - params->epcd_full_connection_window_size; target < current; target++) {
-      if (target < 0) {
+      if (target < 0 || !frames.has_index(target)) {
         continue;
       }
       create_binary_factor(factors, X(target), X(current), frames[target], frames[current]);
@@ -364,9 +365,8 @@ void OdometryEstimationCPU::update_keyframes_overlap(int current) {
       }
       return vmaps.empty() ? 0.0 : gtsam_points::overlap_auto(vmaps, source, deltas);
     }
-    // Use first target's grid resolution for the union grid
-    // Build a temporary grid with all target points
-    auto union_grid = std::make_shared<gtsam_points::FastOccupancyGrid>(0.5);  // default resolution
+    const double* resolution = targets[0]->get_custom_data<double>("occ_resolution");
+    auto union_grid = std::make_shared<gtsam_points::FastOccupancyGrid>(*resolution);
     for (size_t i = 0; i < targets.size(); i++) {
       if (targets[i]->frame && targets[i]->frame->size()) {
         union_grid->insert(*targets[i]->frame, deltas[i].inverse());
