@@ -86,6 +86,8 @@ public:
   }
 
   double inlier_fraction() const;
+  /// @brief Number of points in the current coreset (0 if no coreset has been extracted)
+  int coreset_size() const;
 
 private:
   virtual void update_correspondences(const Eigen::Isometry3d& delta) const override;

@@ -127,12 +127,12 @@ void configure_full(glim::ExactGICPFactor& factor) {
   factor.set_enable_exact_downsampling(false);
 }
 
-void configure_coreset(glim::ExactGICPFactor& factor) {
+void configure_coreset(glim::ExactGICPFactor& factor, int target_num_points = 29, int num_clusters = 32) {
   factor.set_num_threads(2);
   factor.set_max_correspondence_distance(0.25);
   factor.set_enable_exact_downsampling(true);
-  factor.set_coreset_target_num_points(29);
-  factor.set_coreset_num_clusters(32);
+  factor.set_coreset_target_num_points(target_num_points);
+  factor.set_coreset_num_clusters(num_clusters);
   factor.set_deferred_sampling_threshold(1.0, 1.0);
   factor.set_rebuild_threshold(1.0, 1.0);
 }
@@ -183,6 +183,31 @@ void test_binary_factor(
   assert_near_matrix(expected, actual, "binary factor");
 }
 
+void test_coreset_size(
+  const gtsam_points::PointCloud::ConstPtr& target,
+  const gtsam_points::PointCloud::ConstPtr& source,
+  const Eigen::Isometry3d& source_pose) {
+  const gtsam::Key source_key = gtsam::Symbol('x', 0);
+
+  gtsam::Values values;
+  values.insert(source_key, to_pose3(source_pose));
+
+  glim::ExactGICPFactor full(to_pose3(Eigen::Isometry3d::Identity()), source_key, target, source);
+  configure_full(full);
+
+  glim::ExactGICPFactor coreset(to_pose3(Eigen::Isometry3d::Identity()), source_key, target, source);
+  configure_coreset(coreset, 96, 64);
+
+  const Eigen::MatrixXd expected = linearize_to_hessian(full, values)->augmentedInformation();
+  linearize_to_hessian(coreset, values);
+  const Eigen::MatrixXd actual = linearize_to_hessian(coreset, values)->augmentedInformation();
+
+  assert_near_matrix(expected, actual, "coreset size");
+  if (coreset.coreset_size() <= 0 || coreset.coreset_size() > 96) {
+    fail("coreset size " + std::to_string(coreset.coreset_size()) + " is not within (0, 96]");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -197,6 +222,7 @@ int main() {
 
   test_unary_factor(target, source, source_pose);
   test_binary_factor(target, source, source_pose);
+  test_coreset_size(target, source, source_pose);
 
   std::cout << "[test_exact_gicp_factor] passed" << std::endl;
   return 0;
