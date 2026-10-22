@@ -239,8 +239,8 @@ source install/setup.bash
   /root/ros2_ws/src/glim/config/epcd_livox_budget \
   /tmp/glim_eval_output
 
-# 手動実行
-ros2 run glim_ros glim_rosbag \
+# 手動実行 (OMP_WAIT_POLICY=PASSIVE: 待機中のOpenMPスレッドがスピンして他の処理のCPUを奪うのを防ぐ)
+OMP_WAIT_POLICY=PASSIVE ros2 run glim_ros glim_rosbag \
   /root/ros2_ws/src/outdoor_hard_01a \
   /root/ros2_ws/src/outdoor_hard_01b \
   --ros-args \
@@ -255,15 +255,16 @@ evo_ape tum \
   --align
 ```
 
+### 実行時の注意
+
+- `OMP_WAIT_POLICY=PASSIVE` を必ず指定する。libgompは起動時に環境変数を読むため、コード側からは変更できない。未指定 (スピン待機) では、indoor_easy_01 (Azure Kinect, 4000点) のGLIL CPU版で処理時間が約1.6倍、CPU時間が約1.8倍になった。
+- `num_smoother_update_threads` は、smoother更新時にfactorの線形化を並列化するTBBスレッド数 (デフォルト1)。iSAM2は窓全体を一括で再線形化することが多いため、EPCD factorでは `num_threads` と同じ値にすると速くなる。GTSAMがTBBありでビルドされている場合のみ有効。
+
 ## 9. 設定プロファイル一覧
 
-| プロファイル | 用途 | TBB | スレッド |
-|---|---|---|---|
-| `config/epcd_livox_cpu` | 標準EPCD (96pt, 15kf, 8iter) | 不問 | 4 |
-| `config/epcd_livox_budget` | **推奨** (96pt, 10kf, 6iter) | なし推奨 | 4 |
-| `config/epcd_livox_n150` | N150用 (= budgetと同一) | あり推奨 | 4 |
-| `config/epcd_livox_budget_mt` | 多コアCPU用 (16threads) | なし | 16 |
-| `config/livox_gpu_headless` | GPU baseline比較用 | 不問 | - |
+| プロファイル | 用途 | スレッド |
+|---|---|---|
+| `config/epcd_livox_budget` | Livox向けEPCD (4000点, 96pt coreset, 7kf) | 4 (smoother更新も4) |
 
 ## 10. TBBあり/なし切替手順
 

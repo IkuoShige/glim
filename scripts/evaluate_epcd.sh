@@ -50,6 +50,8 @@ echo "[4/5] Running EPCD on outdoor_hard_01a/b..."
 echo "  Config: ${CONFIG_PATH}"
 echo "  Dump: ${DUMP_PATH}"
 
+# Idle OpenMP threads must sleep instead of spinning against the smoother and preprocessing threads
+export OMP_WAIT_POLICY="${OMP_WAIT_POLICY:-PASSIVE}"
 WALL_START=$(date +%s%N)
 
 ros2 run glim_ros glim_rosbag \
