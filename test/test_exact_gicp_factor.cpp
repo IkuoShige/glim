@@ -208,6 +208,32 @@ void test_coreset_size(
   }
 }
 
+void test_small_inlier_set(
+  const gtsam_points::PointCloud::ConstPtr& target,
+  const gtsam_points::PointCloud::ConstPtr& source,
+  const Eigen::Isometry3d& source_pose) {
+  const gtsam::Key source_key = gtsam::Symbol('x', 0);
+
+  gtsam::Values values;
+  values.insert(source_key, to_pose3(source_pose));
+
+  glim::ExactGICPFactor full(to_pose3(Eigen::Isometry3d::Identity()), source_key, target, source);
+  configure_full(full);
+
+  // Target size above the number of inliers: the inliers themselves must be kept as the coreset
+  glim::ExactGICPFactor coreset(to_pose3(Eigen::Isometry3d::Identity()), source_key, target, source);
+  configure_coreset(coreset, 256, 64);
+
+  const Eigen::MatrixXd expected = linearize_to_hessian(full, values)->augmentedInformation();
+  linearize_to_hessian(coreset, values);
+  const Eigen::MatrixXd actual = linearize_to_hessian(coreset, values)->augmentedInformation();
+
+  assert_near_matrix(expected, actual, "small inlier set");
+  if (coreset.coreset_size() != static_cast<int>(source->size())) {
+    fail("small inlier set was not reused as the coreset (size " + std::to_string(coreset.coreset_size()) + ")");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -223,6 +249,7 @@ int main() {
   test_unary_factor(target, source, source_pose);
   test_binary_factor(target, source, source_pose);
   test_coreset_size(target, source, source_pose);
+  test_small_inlier_set(target, source, source_pose);
 
   std::cout << "[test_exact_gicp_factor] passed" << std::endl;
   return 0;

@@ -565,17 +565,21 @@ int ExactGICPFactor::feature_dim() const {
 }
 
 bool ExactGICPFactor::extract_coreset() const {
-  if (!enable_exact_downsampling || !coreset_cache->has_full_sample || coreset_cache->features.cols() == 0) {
+  if (!enable_exact_downsampling || !coreset_cache->has_full_sample) {
     return false;
   }
 
   const int min_target_num = feature_dim() + 1;
   const int target_num = std::max(coreset_target_num_points, min_target_num);
   if (coreset_cache->features.cols() <= target_num) {
+    // The inliers (possibly none) already fit in the coreset, so they are reused as an exact coreset with unit weights
     coreset_cache->selected_source_indices = coreset_cache->feature_source_indices;
     coreset_cache->selected_weights.assign(coreset_cache->selected_source_indices.size(), 1.0);
-    coreset_cache->has_coreset = false;
-    return false;
+    coreset_cache->coreset_linearization_point = coreset_cache->full_linearization_point;
+    coreset_cache->has_coreset = true;
+    coreset_cache->features.resize(0, 0);
+    coreset_cache->feature_source_indices.clear();
+    return true;
   }
 
   Eigen::VectorXi coreset_indices;
