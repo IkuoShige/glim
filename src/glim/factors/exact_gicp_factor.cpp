@@ -71,16 +71,31 @@ void reduce_caratheodory(
     }
     last_cols = P.cols();
 
-    Eigen::MatrixXd A = P.rightCols(P.cols() - 1).colwise() - P.col(0);
-    Eigen::FullPivLU<Eigen::MatrixXd> lu(A);
-    Eigen::MatrixXd kernel = lu.kernel();
-    if (kernel.cols() == 0) {
-      break;
-    }
+    // Any D + 2 points are affinely dependent, so a null vector of the first D + 1 difference columns suffices
+    const int m = std::min<int>(P.cols() - 1, P.rows() + 1);
+    const Eigen::MatrixXd A = P.middleCols(1, m).colwise() - P.col(0);
 
-    Eigen::VectorXd v(P.cols());
-    v.tail(P.cols() - 1) = kernel.col(0);
-    v[0] = -v.tail(P.cols() - 1).sum();
+    Eigen::VectorXd v = Eigen::VectorXd::Zero(P.cols());
+    bool solved = false;
+    if (m == P.rows() + 1) {
+      // Null vector [x; 1] from A[:, :D] x = -A[:, D] when the leading block is well-conditioned
+      const Eigen::PartialPivLU<Eigen::MatrixXd> plu(A.leftCols(m - 1));
+      const Eigen::VectorXd x = plu.solve(-A.col(m - 1));
+      if (x.allFinite() && (A.leftCols(m - 1) * x + A.col(m - 1)).norm() <= 1e-9 * (1.0 + A.norm())) {
+        v.segment(1, m - 1) = x;
+        v[m] = 1.0;
+        solved = true;
+      }
+    }
+    if (!solved) {
+      const Eigen::FullPivLU<Eigen::MatrixXd> lu(A);
+      const Eigen::MatrixXd kernel = lu.kernel();
+      if (kernel.cols() == 0) {
+        break;
+      }
+      v.segment(1, m) = kernel.col(0);
+    }
+    v[0] = -v.segment(1, m).sum();
 
     double alpha = std::numeric_limits<double>::max();
     for (int i = 0; i < P.cols(); i++) {
@@ -530,17 +545,16 @@ ExactGICPFactor::LinearizationResult ExactGICPFactor::evaluate_full(const Eigen:
     if (build_features) {
       // Extract 28-dim feature: upper-triangle of H_source (21), b_source (6), error (1)
       {
-        Eigen::VectorXd feature(28);
+        auto feature = result.features.col(feature_cursor);
         int fc = 0;
         for (int r = 0; r < 6; r++) {
           for (int col = r; col < 6; col++) {
             feature[fc++] = contributions[i].H_source(r, col);
           }
         }
-        feature.middleRows(fc, 6) = contributions[i].b_source;
+        feature.segment<6>(fc) = contributions[i].b_source;
         fc += 6;
         feature[fc] = contributions[i].error;
-        result.features.col(feature_cursor) = feature;
       }
       result.feature_source_indices.push_back(contributions[i].source_index);
       feature_cursor++;
