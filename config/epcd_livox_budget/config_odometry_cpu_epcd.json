@@ -41,6 +41,8 @@
     "epcd_rebuild_rotation": 0.017453292519943295,
     "validate_imu": true,
     "save_imu_rate_trajectory": true,
-    "num_threads": 4
+    "num_threads": 4,
+    // Linearize factors in parallel during smoother updates (relinearization batches cover the whole window)
+    "num_smoother_update_threads": 4
   }
 }
