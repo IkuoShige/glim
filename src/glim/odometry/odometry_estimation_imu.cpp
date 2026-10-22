@@ -81,7 +81,7 @@ OdometryEstimationIMUParams::OdometryEstimationIMUParams() {
   save_imu_rate_trajectory = config.param<bool>("odometry_estimation", "save_imu_rate_trajectory", false);
 
   num_threads = config.param<int>("odometry_estimation", "num_threads", 4);
-  num_smoother_update_threads = 1;
+  num_smoother_update_threads = config.param<int>("odometry_estimation", "num_smoother_update_threads", 1);
 }
 
 OdometryEstimationIMUParams::~OdometryEstimationIMUParams() {}
