@@ -491,16 +491,10 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_registration_
 }
 
 gtsam_points::PointCloud::ConstPtr GlobalMapping::coarse_frame(int submap_id, double resolution) const {
-  // Coarse stages see the submap at the stage scale, with covariances re-estimated at that scale
-  const long key = static_cast<long>(submap_id) * 64 + static_cast<long>(std::round(std::log2(resolution) * 4.0)) + 32;
-  auto found = coarse_frame_cache_.find(key);
-  if (found != coarse_frame_cache_.end()) {
-    return found->second;
-  }
-
+  // Coarse stages see the submap at the stage scale, with covariances re-estimated at that scale.
+  // Recomputed on demand: keeping them for every submap grows memory linearly with the map
   auto frame = gtsam_points::voxelgrid_sampling(submaps[submap_id]->frame, resolution, 2);
   frame->add_covs(gtsam_points::estimate_covariances(*frame, 10, 2));
-  coarse_frame_cache_[key] = frame;
   return frame;
 }
 

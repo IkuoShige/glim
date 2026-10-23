@@ -146,7 +146,6 @@ private:
   std::vector<gtsam_points::PointCloud::ConstPtr> subsampled_submaps;
   mutable std::unordered_map<int, std::shared_ptr<const gtsam_points::NearestNeighborSearch>> kdtree_cache_;
   std::vector<std::shared_ptr<gtsam_points::FastOccupancyGrid>> occ_grids_;
-  mutable std::unordered_map<long, gtsam_points::PointCloud::ConstPtr> coarse_frame_cache_;
 
   std::vector<LoopHypothesis> pending_loops_;
   std::vector<std::pair<int, int>> inserted_loop_betweens_;            // loop corrections added to new_factors in this update
