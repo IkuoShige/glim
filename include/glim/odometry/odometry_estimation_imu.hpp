@@ -67,7 +67,7 @@ public:
   bool save_imu_rate_trajectory;
 
   int num_threads;                  // Number of threads for preprocessing and per-factor parallelism
-  int num_smoother_update_threads;  // Number of threads for TBB parallelism in smoother update (should be kept 1)
+  int num_smoother_update_threads;  // Number of threads for TBB parallelism in smoother update (1 keeps factor linearization serial)
 };
 
 /**
