@@ -588,37 +588,55 @@ void GlobalMapping::update_submaps() {
 }
 
 gtsam_points::ISAM2ResultExt GlobalMapping::update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values) {
-  gtsam_points::ISAM2ResultExt result;
+  gtsam::NonlinearFactorGraph factors = new_factors;
+  gtsam::Values values = new_values;
+  std::unordered_set<gtsam::Key> damped_keys;
 
-  gtsam::Key indeterminant_nearby_key = 0;
-  try {
+  while (true) {
+    gtsam::Key indeterminant_nearby_key = 0;
+    try {
+      gtsam_points::ISAM2ResultExt result;
 #ifdef GTSAM_USE_TBB
-    auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
-    arena->execute([&] {
+      auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
+      arena->execute([&] {
 #endif
-      result = isam2->update(new_factors, new_values);
+        result = isam2->update(factors, values);
 #ifdef GTSAM_USE_TBB
-    });
+      });
 #endif
-  } catch (const gtsam::IndeterminantLinearSystemException& e) {
-    logger->error("an indeterminant linear system exception was caught during global map optimization!!");
-    logger->error(e.what());
-    indeterminant_nearby_key = e.nearbyVariable();
-  } catch (const std::exception& e) {
-    logger->error("an exception was caught during global map optimization!!");
-    logger->error(e.what());
-  }
+      return result;
+    } catch (const gtsam::IndeterminantLinearSystemException& e) {
+      logger->error("an indeterminant linear system exception was caught during global map optimization!!");
+      logger->error(e.what());
+      indeterminant_nearby_key = e.nearbyVariable();
+    } catch (const std::exception& e) {
+      logger->error("an exception was caught during global map optimization!!");
+      logger->error(e.what());
+      return gtsam_points::ISAM2ResultExt();
+    }
 
-  if (indeterminant_nearby_key != 0) {
     const gtsam::Symbol symbol(indeterminant_nearby_key);
     if (symbol.chr() == 'v' || symbol.chr() == 'b' || symbol.chr() == 'e') {
       indeterminant_nearby_key = X(symbol.index() / 2);
     }
-    logger->warn("insert a damping factor at {} to prevent corruption", std::string(gtsam::Symbol(indeterminant_nearby_key)));
 
-    gtsam::Values values = isam2->getLinearizationPoint();
-    gtsam::NonlinearFactorGraph factors = isam2->getFactorsUnsafe();
-    factors.emplace_shared<gtsam_points::LinearDampingFactor>(indeterminant_nearby_key, 6, 1e3);
+    // Damping fixes an underconstrained variable. If the same variable is reported again after it was damped,
+    // the system is not underconstrained but numerically broken (e.g., the estimate has diverged), and rebuilding
+    // the graph again would repeat forever
+    const bool damping_failed = !damped_keys.insert(indeterminant_nearby_key).second;
+    if (damping_failed) {
+      logger->critical("the damping factor at {} did not resolve the indeterminant system", std::string(gtsam::Symbol(indeterminant_nearby_key)));
+      logger->critical("global map optimization is disabled for the rest of this session");
+      params.enable_optimization = false;
+    } else {
+      logger->warn("insert a damping factor at {} to prevent corruption", std::string(gtsam::Symbol(indeterminant_nearby_key)));
+    }
+
+    values = isam2->getLinearizationPoint();
+    factors = isam2->getFactorsUnsafe();
+    if (!damping_failed) {
+      factors.emplace_shared<gtsam_points::LinearDampingFactor>(indeterminant_nearby_key, 6, 1e3);
+    }
 
     gtsam::ISAM2Params isam2_params;
     if (params.use_isam2_dogleg) {
@@ -635,10 +653,7 @@ gtsam_points::ISAM2ResultExt GlobalMapping::update_isam2(const gtsam::NonlinearF
     }
 
     logger->warn("reset isam2");
-    return update_isam2(factors, values);
   }
-
-  return result;
 }
 
 void GlobalMapping::save(const std::string& path) {
