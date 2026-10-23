@@ -263,6 +263,7 @@ struct ExactGICPFactor::CoresetCache {
 
   bool has_full_sample = false;
   bool has_coreset = false;
+  bool pending_deferred_check = false;  // eagerly extracted coreset not yet confirmed by the deferred sampling threshold
   Eigen::Isometry3d full_linearization_point = Eigen::Isometry3d::Identity();
   Eigen::Isometry3d coreset_linearization_point = Eigen::Isometry3d::Identity();
   Eigen::MatrixXd features;
@@ -310,6 +311,7 @@ ExactGICPFactor::ExactGICPFactor(const ExactGICPFactor& other)
   deferred_sampling_rotation(other.deferred_sampling_rotation),
   rebuild_translation(other.rebuild_translation),
   rebuild_rotation(other.rebuild_rotation),
+  eager_coreset_extraction(other.eager_coreset_extraction),
   target(other.target),
   source(other.source),
   target_tree(other.target_tree),
@@ -329,6 +331,7 @@ ExactGICPFactorParams ExactGICPFactorParams::load(const Config& config, const st
   params.deferred_sampling_rotation = config.param<double>(module, "epcd_deferred_sampling_rotation", params.deferred_sampling_rotation);
   params.rebuild_translation = config.param<double>(module, "epcd_rebuild_translation", params.rebuild_translation);
   params.rebuild_rotation = config.param<double>(module, "epcd_rebuild_rotation", params.rebuild_rotation);
+  params.eager_coreset_extraction = config.param<bool>(module, "epcd_eager_coreset_extraction", params.eager_coreset_extraction);
   return params;
 }
 
@@ -340,6 +343,7 @@ void ExactGICPFactor::set_params(const ExactGICPFactorParams& params) {
   set_coreset_num_clusters(params.coreset_num_clusters);
   set_deferred_sampling_threshold(params.deferred_sampling_translation, params.deferred_sampling_rotation);
   set_rebuild_threshold(params.rebuild_translation, params.rebuild_rotation);
+  set_eager_coreset_extraction(params.eager_coreset_extraction);
 }
 
 void ExactGICPFactor::validate_inputs() const {
@@ -592,7 +596,7 @@ bool ExactGICPFactor::extract_coreset() const {
     coreset_cache->coreset_linearization_point = coreset_cache->full_linearization_point;
     coreset_cache->has_coreset = true;
     coreset_cache->features.resize(0, 0);
-    coreset_cache->feature_source_indices.clear();
+    std::vector<int>().swap(coreset_cache->feature_source_indices);
     return true;
   }
 
@@ -617,7 +621,7 @@ bool ExactGICPFactor::extract_coreset() const {
   coreset_cache->coreset_linearization_point = coreset_cache->full_linearization_point;
   coreset_cache->has_coreset = !coreset_cache->selected_source_indices.empty();
   coreset_cache->features.resize(0, 0);
-  coreset_cache->feature_source_indices.clear();
+  std::vector<int>().swap(coreset_cache->feature_source_indices);
   return coreset_cache->has_coreset;
 }
 
@@ -627,6 +631,15 @@ ExactGICPFactor::LinearizationResult ExactGICPFactor::evaluate_for_linearize(con
 
   if (!enable_exact_downsampling) {
     return evaluate_full(delta, false, need_target);
+  }
+
+  if (coreset_cache->pending_deferred_check) {
+    // An eagerly extracted coreset is used only where deferred sampling would have extracted it, so that both give the same result
+    coreset_cache->pending_deferred_check = false;
+    if (within_threshold(delta, coreset_cache->coreset_linearization_point, deferred_sampling_translation, deferred_sampling_rotation)) {
+      return evaluate_subset(delta, coreset_cache->selected_source_indices, coreset_cache->selected_weights, need_target);
+    }
+    coreset_cache->has_coreset = false;
   }
 
   if (coreset_cache->has_coreset &&
@@ -650,6 +663,13 @@ ExactGICPFactor::LinearizationResult ExactGICPFactor::evaluate_for_linearize(con
   coreset_cache->feature_source_indices = result.feature_source_indices;
   coreset_cache->selected_source_indices.clear();
   coreset_cache->selected_weights.clear();
+  coreset_cache->pending_deferred_check = false;
+
+  if (eager_coreset_extraction) {
+    // The sampled features are consumed here; the coreset is still the one sampled at this linearization point
+    coreset_cache->pending_deferred_check = extract_coreset();
+    coreset_cache->has_full_sample = false;
+  }
   return result;
 }
 
