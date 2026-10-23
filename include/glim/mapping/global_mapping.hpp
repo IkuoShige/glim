@@ -4,6 +4,7 @@
 #include <memory>
 #include <random>
 #include <unordered_map>
+#include <glim/factors/exact_gicp_factor.hpp>
 #include <glim/mapping/global_mapping_base.hpp>
 
 namespace gtsam_points {
@@ -48,15 +49,7 @@ public:
   double submap_voxel_resolution_dmax;
   int submap_voxelmap_levels;
   double submap_voxelmap_scaling_factor;
-  double epcd_max_correspondence_distance = 1.0;
-  bool epcd_enable_exact_downsampling = true;
-  int epcd_num_threads = 4;
-  int epcd_coreset_target_num_points = 96;
-  int epcd_coreset_num_clusters = 64;
-  double epcd_deferred_sampling_translation = 0.25;
-  double epcd_deferred_sampling_rotation = 0.004363323129985824;
-  double epcd_rebuild_translation = 1.0;
-  double epcd_rebuild_rotation = 0.017453292519943295;
+  ExactGICPFactorParams epcd;
 
   double randomsampling_rate;
   double max_implicit_loop_distance;
@@ -99,6 +92,7 @@ private:
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_between_factors(int current) const;
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_matching_cost_factors(int current) const;
   std::shared_ptr<gtsam::NonlinearFactorGraph> align_and_create_between_factor(int i, int j) const;
+  gtsam::NonlinearFactor::shared_ptr create_epcd_factor(int target, int source) const;
 
   void update_submaps();
   gtsam_points::ISAM2ResultExt update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values);

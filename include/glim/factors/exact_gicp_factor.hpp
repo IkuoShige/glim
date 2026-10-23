@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <gtsam_points/factors/integrated_matching_cost_factor.hpp>
@@ -12,6 +14,26 @@ struct NearestNeighborSearch;
 }  // namespace gtsam_points
 
 namespace glim {
+
+class Config;
+
+/**
+ * @brief Parameters of ExactGICPFactor shared by odometry, sub mapping, and global mapping.
+ */
+struct ExactGICPFactorParams {
+  int num_threads = 4;
+  double max_correspondence_distance = 1.0;
+  bool enable_exact_downsampling = true;
+  int coreset_target_num_points = 96;
+  int coreset_num_clusters = 64;
+  double deferred_sampling_translation = 0.25;
+  double deferred_sampling_rotation = 0.25 * M_PI / 180.0;
+  double rebuild_translation = 1.0;
+  double rebuild_rotation = 1.0 * M_PI / 180.0;
+
+  /// @brief Read "epcd_*" parameters of the given config module except for num_threads.
+  static ExactGICPFactorParams load(const Config& config, const std::string& module);
+};
 
 /**
  * @brief Exact point cloud downsampling GICP factor.
@@ -48,6 +70,7 @@ public:
   virtual gtsam::NonlinearFactor::shared_ptr clone() const override { return gtsam::NonlinearFactor::shared_ptr(new ExactGICPFactor(*this)); }
   virtual std::shared_ptr<gtsam::GaussianFactor> linearize(const gtsam::Values& values) const override;
 
+  void set_params(const ExactGICPFactorParams& params);
   void set_num_threads(int n) { num_threads = std::max(1, n); }
   void set_max_correspondence_distance(double dist) { max_correspondence_distance_sq = dist * dist; }
   void set_enable_exact_downsampling(bool enable) { enable_exact_downsampling = enable; }
@@ -86,30 +109,31 @@ private:
   LinearizationResult evaluate_for_linearize(const Eigen::Isometry3d& delta) const;
   void compute_perpoint(int source_index, const Eigen::Isometry3d& delta, const Eigen::Matrix3d& R, WeightedContribution& c, unsigned char& valid_flag, bool need_target = true) const;
 
+  void validate_inputs() const;
   void ensure_target_tree() const;
   bool extract_coreset() const;
   int feature_dim() const;
   bool within_threshold(const Eigen::Isometry3d& delta, const Eigen::Isometry3d& reference, double trans_thresh, double rot_thresh) const;
 
 private:
-  int num_threads;
-  double max_correspondence_distance_sq;
+  int num_threads = 1;
+  double max_correspondence_distance_sq = 1.0;
 
-  bool enable_exact_downsampling;
-  int coreset_target_num_points;
-  int coreset_num_clusters;
-  double deferred_sampling_translation;
-  double deferred_sampling_rotation;
-  double rebuild_translation;
-  double rebuild_rotation;
+  bool enable_exact_downsampling = true;
+  int coreset_target_num_points = 96;
+  int coreset_num_clusters = 64;
+  double deferred_sampling_translation = 0.25;
+  double deferred_sampling_rotation = 0.25 * M_PI / 180.0;
+  double rebuild_translation = 1.0;
+  double rebuild_rotation = 1.0 * M_PI / 180.0;
 
   gtsam_points::PointCloud::ConstPtr target;
   gtsam_points::PointCloud::ConstPtr source;
   mutable std::shared_ptr<const gtsam_points::NearestNeighborSearch> target_tree;
 
   mutable std::unique_ptr<CoresetCache> coreset_cache;
-  mutable int last_num_inliers;
-  mutable int last_num_evaluated;
+  mutable int last_num_inliers = 0;
+  mutable int last_num_evaluated = 0;
 };
 
 }  // namespace glim
