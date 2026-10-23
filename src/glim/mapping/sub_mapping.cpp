@@ -1,6 +1,7 @@
 #include <glim/mapping/sub_mapping.hpp>
 
 #include <filesystem>
+#include <stdexcept>
 #include <spdlog/spdlog.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/slam/BetweenFactor.h>
@@ -80,6 +81,15 @@ SubMappingParams::SubMappingParams() {
 SubMappingParams::~SubMappingParams() {}
 
 SubMapping::SubMapping(const SubMappingParams& params) : params(params) {
+#ifndef GTSAM_POINTS_USE_CUDA
+  // Without CUDA, GPU factors would be silently dropped, so stop instead of building a map without them
+  if (params.enable_gpu) {
+    const std::string msg = "sub_mapping: " + params.registration_error_factor_type + " requires GLIM built with GPU option; pass a CPU config (e.g., --config_path <glim>/config/epcd_livox_budget)";
+    logger->critical(msg);
+    throw std::runtime_error(msg);
+  }
+#endif
+
   submap_count = 0;
   imu_integration.reset(new IMUIntegration);
   deskewing.reset(new CloudDeskewing);

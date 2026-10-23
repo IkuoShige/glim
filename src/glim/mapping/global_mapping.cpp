@@ -1,6 +1,7 @@
 #include <glim/mapping/global_mapping.hpp>
 
 #include <map>
+#include <stdexcept>
 #include <unordered_set>
 #include <spdlog/spdlog.h>
 #include <boost/filesystem.hpp>
@@ -89,8 +90,11 @@ GlobalMappingParams::~GlobalMappingParams() {}
 
 GlobalMapping::GlobalMapping(const GlobalMappingParams& params) : params(params) {
 #ifndef GTSAM_POINTS_USE_CUDA
+  // Without CUDA, GPU factors would be silently dropped (e.g., offline_viewer with the default GPU config), so stop instead of building a map without them
   if (params.enable_gpu) {
-    logger->error("GPU-based factors cannot be used because GLIM is built without GPU option!!");
+    const std::string msg = "global_mapping: " + params.registration_error_factor_type + " requires GLIM built with GPU option; pass a CPU config (e.g., --config_path <glim>/config/epcd_livox_budget)";
+    logger->critical(msg);
+    throw std::runtime_error(msg);
   }
 #endif
 
