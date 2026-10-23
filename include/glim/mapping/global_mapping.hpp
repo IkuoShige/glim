@@ -3,7 +3,12 @@
 #include <any>
 #include <memory>
 #include <random>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
+#include <Eigen/Geometry>
+#include <gtsam/base/Matrix.h>
+#include <gtsam/inference/Factor.h>
 #include <glim/factors/exact_gicp_factor.hpp>
 #include <glim/mapping/global_mapping_base.hpp>
 
@@ -54,7 +59,9 @@ public:
   double randomsampling_rate;
   double max_implicit_loop_distance;
   double min_implicit_loop_overlap;
-  int matching_cost_factor_window;  // submap index distance threshold; pairs beyond this use BetweenFactor (-1 = unlimited)
+  bool enable_loop_verification;  // register non-recent overlapping pairs coarse-to-fine before adding registration error factors
+  int loop_coarse_levels;         // coarse-to-fine stages at max_correspondence_distance * 2^k (k = levels-1, ..., 0)
+  int loop_consistency_submaps;   // number of subsequent submaps that must agree with a loop correction before it is inserted
 
   bool use_isam2_dogleg;
   double isam2_relinearize_skip;
@@ -90,13 +97,37 @@ private:
   void insert_submap(int current, const SubMap::Ptr& submap);
 
   std::shared_ptr<gtsam::NonlinearFactorGraph> create_between_factors(int current) const;
-  std::shared_ptr<gtsam::NonlinearFactorGraph> create_matching_cost_factors(int current) const;
-  std::shared_ptr<gtsam::NonlinearFactorGraph> align_and_create_between_factor(int i, int j) const;
+  std::shared_ptr<gtsam::NonlinearFactorGraph> create_matching_cost_factors(int current);
+  std::shared_ptr<gtsam::NonlinearFactorGraph> create_registration_factors(int target, int source) const;
   std::shared_ptr<gtsam_points::FastOccupancyGrid> create_occupancy_grid(const gtsam_points::PointCloud& points, double base_resolution) const;
   gtsam::NonlinearFactor::shared_ptr create_epcd_factor(int target, int source) const;
 
+  struct LoopAlignment {
+    bool valid = false;
+    Eigen::Isometry3d T_target_source = Eigen::Isometry3d::Identity();
+    gtsam::Matrix6 H = gtsam::Matrix6::Zero();
+  };
+
+  // A registration result between a group of past submaps (one revisit) and a new submap, awaiting confirmation
+  struct LoopHypothesis {
+    std::vector<int> targets;
+    int representative;
+    int source;
+    Eigen::Isometry3d T_world_source;  // source pose implied by the registration
+    LoopAlignment alignment;
+    bool in_basin;                     // the current estimate already agrees with the registration
+    int confirmations;
+    bool rejected;
+  };
+
+  std::shared_ptr<gtsam::NonlinearFactorGraph> create_verified_loop_factors(int current, const std::vector<std::pair<int, double>>& candidates);
+  std::shared_ptr<gtsam::NonlinearFactorGraph> confirm_loop(const LoopHypothesis& hypothesis);
+  LoopAlignment align_coarse_to_fine(int target, int source, const Eigen::Isometry3d& init_T_target_source) const;
+  gtsam_points::PointCloud::ConstPtr coarse_frame(int submap_id, double resolution) const;
+  double source_displacement(int source, const Eigen::Isometry3d& T_a, const Eigen::Isometry3d& T_b) const;
+
   void update_submaps();
-  gtsam_points::ISAM2ResultExt update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values);
+  gtsam_points::ISAM2ResultExt update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values, const gtsam::FactorIndices& remove_indices = {});
 
   void recover_graph() override;
   std::pair<gtsam::NonlinearFactorGraph, gtsam::Values> recover_graph(const gtsam::NonlinearFactorGraph& graph, const gtsam::Values& values, int start_from_frame_id) const;
@@ -115,6 +146,12 @@ private:
   std::vector<gtsam_points::PointCloud::ConstPtr> subsampled_submaps;
   mutable std::unordered_map<int, std::shared_ptr<const gtsam_points::NearestNeighborSearch>> kdtree_cache_;
   std::vector<std::shared_ptr<gtsam_points::FastOccupancyGrid>> occ_grids_;
+  mutable std::unordered_map<long, gtsam_points::PointCloud::ConstPtr> coarse_frame_cache_;
+
+  std::vector<LoopHypothesis> pending_loops_;
+  std::vector<std::pair<int, int>> inserted_loop_betweens_;            // loop corrections added to new_factors in this update
+  std::vector<std::tuple<int, int, size_t>> loop_between_indices_;     // (target, source, isam2 factor index)
+  gtsam::FactorIndices factors_to_remove_;                             // loop corrections replaced by registration error factors
 
   std::unique_ptr<gtsam::Values> new_values;
   std::unique_ptr<gtsam::NonlinearFactorGraph> new_factors;

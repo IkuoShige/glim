@@ -26,7 +26,9 @@
     "epcd_eager_coreset_extraction": true,
     "max_implicit_loop_distance": 100.0,
     "min_implicit_loop_overlap": 0.1,
-    "matching_cost_factor_window": 3,
+    "enable_loop_verification": true,
+    "loop_coarse_levels": 4,
+    "loop_consistency_submaps": 2,
     "use_isam2_dogleg": false,
     "isam2_relinearize_skip": 3,
     "isam2_relinearize_thresh": 0.1
