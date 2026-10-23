@@ -236,6 +236,51 @@ void test_small_inlier_set(
 
 }  // namespace
 
+void test_eager_matches_deferred(
+  const gtsam_points::PointCloud::ConstPtr& target,
+  const gtsam_points::PointCloud::ConstPtr& source,
+  const Eigen::Isometry3d& source_pose) {
+  const gtsam::Key source_key = gtsam::Symbol('x', 0);
+
+  auto offset = [&](double translation, double rotation) {
+    Eigen::Isometry3d delta = Eigen::Isometry3d::Identity();
+    delta.translation() = Eigen::Vector3d(translation, 0.5 * translation, 0.0);
+    delta.linear() = Eigen::AngleAxisd(rotation, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    return source_pose * delta;
+  };
+
+  // Linearization sequences covering: coreset extraction within the deferred threshold, resampling beyond it,
+  // reuse within the rebuild threshold, and rebuild beyond it
+  const std::vector<std::vector<Eigen::Isometry3d>> sequences = {
+    {offset(0.0, 0.0), offset(0.02, 0.005), offset(0.2, 0.05), offset(0.6, 0.3)},
+    {offset(0.0, 0.0), offset(0.2, 0.05), offset(0.21, 0.05), offset(0.0, 0.0)},
+  };
+
+  for (size_t k = 0; k < sequences.size(); k++) {
+    glim::ExactGICPFactor deferred(to_pose3(Eigen::Isometry3d::Identity()), source_key, target, source);
+    glim::ExactGICPFactor eager(to_pose3(Eigen::Isometry3d::Identity()), source_key, target, source);
+    for (auto* factor : {&deferred, &eager}) {
+      configure_coreset(*factor);
+      factor->set_deferred_sampling_threshold(0.1, 0.02);
+      factor->set_rebuild_threshold(0.5, 0.2);
+    }
+    eager.set_eager_coreset_extraction(true);
+
+    for (size_t i = 0; i < sequences[k].size(); i++) {
+      gtsam::Values values;
+      values.insert(source_key, to_pose3(sequences[k][i]));
+      const Eigen::MatrixXd expected = linearize_to_hessian(deferred, values)->augmentedInformation();
+      const Eigen::MatrixXd actual = linearize_to_hessian(eager, values)->augmentedInformation();
+      assert_near_matrix(expected, actual, "eager sequence " + std::to_string(k) + " step " + std::to_string(i));
+
+      // Eager extraction must not keep the sampled features
+      if (i == 0 && eager.memory_usage() >= deferred.memory_usage()) {
+        fail("eager coreset extraction did not release the sampled features");
+      }
+    }
+  }
+}
+
 int main() {
   const auto source_points = make_source_points();
   const auto source_covariances = make_covariances(source_points.size(), 0.02);
@@ -250,6 +295,7 @@ int main() {
   test_binary_factor(target, source, source_pose);
   test_coreset_size(target, source, source_pose);
   test_small_inlier_set(target, source, source_pose);
+  test_eager_matches_deferred(target, source, source_pose);
 
   std::cout << "[test_exact_gicp_factor] passed" << std::endl;
   return 0;

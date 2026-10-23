@@ -56,6 +56,7 @@
 
 ### Global mapping
 - **min_implicit_loop_overlap** (default 0.2) : Minimum overlap rate to create registration error factor.
+- **epcd_eager_coreset_extraction** (default false) : Extract the EPCD coreset right after full sampling instead of at the next linearization. The linearization results are the same; it releases the sampled features, which global mapping would otherwise keep for most factors.
 
 ### Common parameters for sub and global mapping
 - **enable_imu** (default true) : Must be false if the LiDAR-only odometry estimation is used.
