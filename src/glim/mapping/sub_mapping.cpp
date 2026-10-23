@@ -80,6 +80,15 @@ SubMappingParams::SubMappingParams() {
 SubMappingParams::~SubMappingParams() {}
 
 SubMapping::SubMapping(const SubMappingParams& params) : params(params) {
+#ifndef GTSAM_POINTS_USE_CUDA
+  // Without CUDA, GPU factors would be silently dropped, so fall back to CPU VGICP
+  if (params.enable_gpu) {
+    logger->warn("{} requested but GLIM is built without GPU option, falling back to VGICP", params.registration_error_factor_type);
+    this->params.registration_error_factor_type = "VGICP";
+    this->params.enable_gpu = false;
+  }
+#endif
+
   submap_count = 0;
   imu_integration.reset(new IMUIntegration);
   deskewing.reset(new CloudDeskewing);

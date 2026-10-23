@@ -89,8 +89,11 @@ GlobalMappingParams::~GlobalMappingParams() {}
 
 GlobalMapping::GlobalMapping(const GlobalMappingParams& params) : params(params) {
 #ifndef GTSAM_POINTS_USE_CUDA
+  // Without CUDA, GPU factors would be silently dropped (e.g., offline_viewer with the default GPU config), so fall back to CPU VGICP
   if (params.enable_gpu) {
-    logger->error("GPU-based factors cannot be used because GLIM is built without GPU option!!");
+    logger->warn("{} requested but GLIM is built without GPU option, falling back to VGICP", params.registration_error_factor_type);
+    this->params.registration_error_factor_type = "VGICP";
+    this->params.enable_gpu = false;
   }
 #endif
 
