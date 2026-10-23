@@ -281,7 +281,8 @@ void GlobalMapping::insert_submap(int current, const SubMap::Ptr& submap) {
   }
 #endif
 
-  if (submap->voxelmaps.empty()) {
+  // EPCD factors register against the submap points, so voxelmaps would only cost memory
+  if (submap->voxelmaps.empty() && params.registration_error_factor_type != "EPCD_GICP") {
     for (int i = 0; i < params.submap_voxelmap_levels; i++) {
       const double resolution = base_resolution * std::pow(params.submap_voxelmap_scaling_factor, i);
       auto voxelmap = std::make_shared<gtsam_points::GaussianVoxelMapCPU>(resolution);
