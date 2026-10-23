@@ -1,8 +1,11 @@
 #include <glim/mapping/global_mapping.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <stdexcept>
 #include <unordered_set>
+#include <Eigen/Eigenvalues>
 #include <spdlog/spdlog.h>
 #include <boost/filesystem.hpp>
 
@@ -31,6 +34,7 @@
 #include <gtsam_points/cuda/stream_temp_buffer_roundrobin.hpp>
 
 #include <gtsam_points/ann/kdtree2.hpp>
+#include <gtsam_points/features/covariance_estimation.hpp>
 #include <gtsam_points/ann/fast_occupancy_grid.hpp>
 #include <glim/factors/exact_gicp_factor.hpp>
 #include <glim/util/config.hpp>
@@ -75,7 +79,9 @@ GlobalMappingParams::GlobalMappingParams() {
   randomsampling_rate = config.param<double>("global_mapping", "randomsampling_rate", 1.0);
   max_implicit_loop_distance = config.param<double>("global_mapping", "max_implicit_loop_distance", 100.0);
   min_implicit_loop_overlap = config.param<double>("global_mapping", "min_implicit_loop_overlap", 0.1);
-  matching_cost_factor_window = config.param<int>("global_mapping", "matching_cost_factor_window", -1);
+  enable_loop_verification = config.param<bool>("global_mapping", "enable_loop_verification", false);
+  loop_coarse_levels = std::max(1, config.param<int>("global_mapping", "loop_coarse_levels", 4));
+  loop_consistency_submaps = std::max(1, config.param<int>("global_mapping", "loop_consistency_submaps", 2));
 
   enable_gpu = registration_error_factor_type.find("GPU") != std::string::npos;
 
@@ -233,8 +239,19 @@ void GlobalMapping::insert_submap(const SubMap::Ptr& submap) {
   logger->debug("|new_factors|={} |new_values|={}", new_factors->size(), new_values->size());
 
   Callbacks::on_smoother_update(*isam2, *new_factors, *new_values);
-  auto result = update_isam2(*new_factors, *new_values);
+  auto result = update_isam2(*new_factors, *new_values, factors_to_remove_);
   Callbacks::on_smoother_update_result(*isam2, result);
+
+  // Remember the isam2 indices of loop corrections to replace them later
+  for (auto& correction : new_loop_corrections_) {
+    const size_t k = std::find(new_factors->begin(), new_factors->end(), correction.factor) - new_factors->begin();
+    if (k < result.newFactorsIndices.size()) {
+      correction.isam2_index = result.newFactorsIndices[k];
+      loop_corrections_.push_back(correction);
+    }
+  }
+  new_loop_corrections_.clear();
+  factors_to_remove_.clear();
 
   new_values.reset(new gtsam::Values);
   new_factors.reset(new gtsam::NonlinearFactorGraph);
@@ -338,32 +355,7 @@ void GlobalMapping::find_overlapping_submaps(double min_overlap) {
         continue;
       }
 
-      // For non-recent pairs, use lightweight BetweenFactor instead of heavy matching cost factor
-      const bool use_between = params.matching_cost_factor_window >= 0 && (j - i) > params.matching_cost_factor_window;
-      if (use_between) {
-        logger->debug("find_overlapping ({}, {}): using BetweenFactor (dist={})", i, j, j - i);
-        new_factors->add(*align_and_create_between_factor(i, j));
-        continue;
-      }
-
-      if (params.registration_error_factor_type == "EPCD_GICP") {
-        new_factors->add(create_epcd_factor(i, j));
-      }
-#ifdef GTSAM_POINTS_USE_CUDA
-      else if (std::dynamic_pointer_cast<gtsam_points::GaussianVoxelMapGPU>(submaps[i]->voxelmaps.back()) && subsampled_submaps[j]->points_gpu) {
-        const auto stream_buffer = std::any_cast<std::shared_ptr<gtsam_points::StreamTempBufferRoundRobin>>(stream_buffer_roundrobin)->get_stream_buffer();
-        const auto& stream = stream_buffer.first;
-        const auto& buffer = stream_buffer.second;
-        for (const auto& voxelmap : submaps[i]->voxelmaps) {
-          new_factors->emplace_shared<gtsam_points::IntegratedVGICPFactorGPU>(X(i), X(j), voxelmap, subsampled_submaps[j], stream, buffer);
-        }
-      }
-#endif
-      else {
-        for (const auto& voxelmap : submaps[i]->voxelmaps) {
-          new_factors->emplace_shared<gtsam_points::IntegratedVGICPFactor>(X(i), X(j), voxelmap, subsampled_submaps[j]);
-        }
-      }
+      new_factors->add(*create_registration_factors(i, j));
     }
   }
 
@@ -468,54 +460,259 @@ gtsam::NonlinearFactor::shared_ptr GlobalMapping::create_epcd_factor(int target,
   return factor;
 }
 
-std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::align_and_create_between_factor(int i, int j) const {
-  auto result = std::make_shared<gtsam::NonlinearFactorGraph>();
+std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_registration_factors(int target, int source) const {
+  auto factors = std::make_shared<gtsam::NonlinearFactorGraph>();
+  if (params.registration_error_factor_type == "VGICP") {
+    for (const auto& voxelmap : submaps[target]->voxelmaps) {
+      factors->emplace_shared<gtsam_points::IntegratedVGICPFactor>(X(target), X(source), voxelmap, subsampled_submaps[source]);
+    }
+  } else if (params.registration_error_factor_type == "EPCD_GICP") {
+    factors->add(create_epcd_factor(target, source));
+  }
+#ifdef GTSAM_POINTS_USE_CUDA
+  else if (params.registration_error_factor_type == "VGICP_GPU") {
+    const auto stream_buffer = std::any_cast<std::shared_ptr<gtsam_points::StreamTempBufferRoundRobin>>(stream_buffer_roundrobin)->get_stream_buffer();
+    const auto& stream = stream_buffer.first;
+    const auto& buffer = stream_buffer.second;
+    for (const auto& voxelmap : submaps[target]->voxelmaps) {
+      factors->emplace_shared<gtsam_points::IntegratedVGICPFactorGPU>(X(target), X(source), voxelmap, subsampled_submaps[source], stream, buffer);
+    }
+  }
+#endif
+  else {
+    logger->warn("unknown registration error type ({})", params.registration_error_factor_type);
+  }
+  return factors;
+}
 
-  const gtsam::Pose3 init_delta = gtsam::Pose3((submaps[i]->T_world_origin.inverse() * submaps[j]->T_world_origin).matrix());
+gtsam_points::PointCloud::ConstPtr GlobalMapping::coarse_frame(int submap_id, double resolution) const {
+  // Recomputed on demand because caching them for all submaps costs memory
+  auto frame = gtsam_points::voxelgrid_sampling(submaps[submap_id]->frame, resolution, 2);
+  frame->add_covs(gtsam_points::estimate_covariances(*frame, 10, 2));
+  return frame;
+}
+
+double GlobalMapping::source_displacement(int source, const Eigen::Isometry3d& T_a, const Eigen::Isometry3d& T_b) const {
+  // RMS displacement of the source points between two poses
+  const auto& frame = subsampled_submaps[source];
+  const int step = std::max<int>(1, frame->size() / 256);
+  const Eigen::Isometry3d delta = T_a.inverse() * T_b;
+  double sum_sq = 0.0;
+  int count = 0;
+  for (int k = 0; k < frame->size(); k += step) {
+    const Eigen::Vector3d p = frame->points[k].head<3>();
+    sum_sq += (delta * p - p).squaredNorm();
+    count++;
+  }
+  return count ? std::sqrt(sum_sq / count) : 0.0;
+}
+
+GlobalMapping::LoopAlignment GlobalMapping::align_coarse_to_fine(int target, int source, const Eigen::Isometry3d& init_T_target_source) const {
+  const double finest = params.epcd.max_correspondence_distance;
+  gtsam::Pose3 T_target_source(init_T_target_source.matrix());
+
+  auto optimize = [&](const gtsam_points::PointCloud::ConstPtr& target_frame, const gtsam_points::PointCloud::ConstPtr& source_frame, double max_corr) {
+    gtsam::Values values;
+    values.insert(X(0), gtsam::Pose3::Identity());
+    values.insert(X(1), T_target_source);
+
+    gtsam::NonlinearFactorGraph graph;
+    graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), gtsam::Pose3::Identity(), gtsam::noiseModel::Isotropic::Precision(6, 1e6));
+    auto factor = gtsam::make_shared<gtsam_points::IntegratedGICPFactor>(X(0), X(1), target_frame, source_frame);
+    factor->set_max_correspondence_distance(max_corr);
+    factor->set_num_threads(2);
+    graph.add(factor);
+
+    gtsam_points::LevenbergMarquardtExtParams lm_params;
+    lm_params.setlambdaInitial(1e-12);
+    lm_params.setMaxIterations(10);
+
+#ifdef GTSAM_USE_TBB
+    auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
+    arena->execute([&] {
+#endif
+      gtsam_points::LevenbergMarquardtOptimizerExt optimizer(graph, values, lm_params);
+      values = optimizer.optimize();
+#ifdef GTSAM_USE_TBB
+    });
+#endif
+    return values.at<gtsam::Pose3>(X(1));
+  };
+
+  // Coarse-to-fine. Stop once a stage moves the source less than the finest correspondence distance
+  for (int level = params.loop_coarse_levels - 1; level > 0; level--) {
+    const double max_corr = finest * std::pow(2.0, level);
+    const auto next = optimize(coarse_frame(target, max_corr / 4.0), coarse_frame(source, max_corr / 4.0), max_corr);
+    const double moved = source_displacement(source, Eigen::Isometry3d(T_target_source.matrix()), Eigen::Isometry3d(next.matrix()));
+    T_target_source = next;
+    if (moved < finest) {
+      break;
+    }
+  }
+  T_target_source = optimize(submaps[target]->frame, submaps[source]->frame, finest);
+
+  // Accept only if inliers do not decrease and all six DoFs are observable
+  auto check = gtsam::make_shared<gtsam_points::IntegratedGICPFactor>(X(0), X(1), submaps[target]->frame, submaps[source]->frame);
+  check->set_max_correspondence_distance(finest);
+  check->set_num_threads(2);
 
   gtsam::Values values;
   values.insert(X(0), gtsam::Pose3::Identity());
-  values.insert(X(1), init_delta);
+  values.insert(X(1), gtsam::Pose3(init_T_target_source.matrix()));
+  check->error(values);
+  const double inlier_before = check->inlier_fraction();
 
-  gtsam::NonlinearFactorGraph graph;
-  graph.emplace_shared<gtsam::PriorFactor<gtsam::Pose3>>(X(0), gtsam::Pose3::Identity(), gtsam::noiseModel::Isotropic::Precision(6, 1e6));
+  values.update(X(1), T_target_source);
+  check->error(values);
+  const double inlier_after = check->inlier_fraction();
 
-  auto factor = gtsam::make_shared<gtsam_points::IntegratedGICPFactor>(X(0), X(1), submaps[i]->frame, submaps[j]->frame);
-  factor->set_max_correspondence_distance(params.epcd.max_correspondence_distance);
-  factor->set_num_threads(2);
-  graph.add(factor);
+  LoopAlignment result;
+  result.T_target_source = Eigen::Isometry3d(T_target_source.matrix());
+  result.H = check->linearize(values)->hessianBlockDiagonal()[X(1)];
 
-  gtsam_points::LevenbergMarquardtExtParams lm_params;
-  lm_params.setlambdaInitial(1e-12);
-  lm_params.setMaxIterations(10);
-
-#ifdef GTSAM_USE_TBB
-  auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
-  arena->execute([&] {
-#endif
-    gtsam_points::LevenbergMarquardtOptimizerExt optimizer(graph, values, lm_params);
-    values = optimizer.optimize();
-#ifdef GTSAM_USE_TBB
-  });
-#endif
-
-  const gtsam::Pose3 estimated_delta = values.at<gtsam::Pose3>(X(1));
-  const auto linearized = factor->linearize(values);
-  // GPU builds use nonlinear matching cost factors for most pairs, so BetweenFactor is rare
-  // and can use strong regularization. CPU/EPCD builds rely on BetweenFactor for non-recent
-  // pairs, where large regularization over-constrains poorly observable DoFs (z, roll, pitch)
-  // on flat terrain, causing ground warping.
-#ifdef GTSAM_POINTS_USE_CUDA
-  const gtsam::Matrix6 H = linearized->hessianBlockDiagonal()[X(1)] + 1e6 * gtsam::Matrix6::Identity();
-#else
-  const gtsam::Matrix6 H = linearized->hessianBlockDiagonal()[X(1)] + 1e2 * gtsam::Matrix6::Identity();
-#endif
-
-  result->add(gtsam::make_shared<gtsam::BetweenFactor<gtsam::Pose3>>(X(i), X(j), estimated_delta, gtsam::noiseModel::Gaussian::Information(H)));
+  Eigen::SelfAdjointEigenSolver<gtsam::Matrix6> eig(result.H);
+  const bool observable = eig.eigenvalues()[0] > 1e-6 * eig.eigenvalues()[5];
+  result.valid = observable && inlier_after >= inlier_before;
   return result;
 }
 
-std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost_factors(int current) const {
+std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::confirm_loop(const LoopHypothesis& hypothesis) {
+  auto factors = std::make_shared<gtsam::NonlinearFactorGraph>();
+  if (!hypothesis.in_basin) {
+    // Out of the basin: pull the estimate in with a between factor
+    const gtsam::Pose3 measured(hypothesis.alignment.T_target_source.matrix());
+    const auto noise = gtsam::noiseModel::Gaussian::Information(hypothesis.alignment.H);
+    const auto between = gtsam::make_shared<gtsam::BetweenFactor<gtsam::Pose3>>(X(hypothesis.representative), X(hypothesis.source), measured, noise);
+    factors->add(between);
+    new_loop_corrections_.push_back(LoopCorrection{hypothesis.representative, hypothesis.source, between});
+    logger->info("loop correction ({}, {}) inserted ({} target submaps)", hypothesis.representative, hypothesis.source, hypothesis.targets.size());
+    return factors;
+  }
+
+  for (const int target : hypothesis.targets) {
+    factors->add(*create_registration_factors(target, hypothesis.source));
+  }
+
+  // Replace loop corrections towards these submaps with registration error factors
+  for (auto it = loop_corrections_.begin(); it != loop_corrections_.end();) {
+    if (std::find(hypothesis.targets.begin(), hypothesis.targets.end(), it->target) == hypothesis.targets.end()) {
+      it++;
+      continue;
+    }
+    factors->add(*create_registration_factors(it->target, it->source));
+    factors_to_remove_.push_back(it->isam2_index);
+    logger->info("loop correction ({}, {}) replaced with registration error factors", it->target, it->source);
+    it = loop_corrections_.erase(it);
+  }
+  return factors;
+}
+
+std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_verified_loop_factors(int current, const std::vector<std::pair<int, double>>& candidates) {
+  // Registration error factors converge only within about the correspondence distance,
+  // so each revisit (a run of consecutive overlapping submaps) is registered coarse-to-fine first
+  auto factors = std::make_shared<gtsam::NonlinearFactorGraph>();
+  const double basin = params.epcd.max_correspondence_distance;
+  const Eigen::Isometry3d T_world_current = submaps[current]->T_world_origin;
+
+  std::vector<std::vector<std::pair<int, double>>> groups;
+  for (const auto& candidate : candidates) {
+    if (groups.empty() || candidate.first != groups.back().back().first + 1) {
+      groups.emplace_back();
+    }
+    groups.back().push_back(candidate);
+  }
+
+  std::vector<LoopHypothesis> hypotheses;
+  for (auto& group : groups) {
+    std::vector<int> targets;
+    for (const auto& member : group) {
+      targets.push_back(member.first);
+    }
+
+    // The submaps being traversed get registration error factors directly
+    if (group.back().first == current - 1) {
+      for (const int target : targets) {
+        factors->add(*create_registration_factors(target, current));
+      }
+      continue;
+    }
+
+    std::sort(group.begin(), group.end(), [](const auto& lhs, const auto& rhs) { return lhs.second > rhs.second; });
+    std::vector<Eigen::Isometry3d> implied;
+    LoopHypothesis hypothesis;
+    for (int k = 0; k < std::min<int>(2, group.size()); k++) {
+      const int target = group[k].first;
+      const auto alignment = align_coarse_to_fine(target, current, submaps[target]->T_world_origin.inverse() * T_world_current);
+      if (!alignment.valid) {
+        continue;
+      }
+      if (implied.empty()) {
+        hypothesis.representative = target;
+        hypothesis.alignment = alignment;
+      }
+      implied.push_back(submaps[target]->T_world_origin * alignment.T_target_source);
+    }
+    if (implied.empty()) {
+      continue;
+    }
+
+    hypothesis.targets = targets;
+    hypothesis.source = current;
+    hypothesis.T_world_source = implied.front();
+    hypothesis.in_basin = source_displacement(current, implied.front(), T_world_current) < basin;
+    hypothesis.confirmations = (implied.size() == 2 && source_displacement(current, implied[0], implied[1]) < basin) ? 1 : 0;
+    hypothesis.rejected = false;
+    hypotheses.push_back(hypothesis);
+  }
+
+  // Temporal consistency: hypotheses on the same revisit must imply the estimated relative motion
+  for (auto& pending : pending_loops_) {
+    for (auto& hypothesis : hypotheses) {
+      const bool same_revisit = std::any_of(pending.targets.begin(), pending.targets.end(), [&](int target) {
+        return std::find(hypothesis.targets.begin(), hypothesis.targets.end(), target) != hypothesis.targets.end();
+      });
+      if (!same_revisit) {
+        continue;
+      }
+
+      const Eigen::Isometry3d implied_motion = pending.T_world_source.inverse() * hypothesis.T_world_source;
+      const Eigen::Isometry3d estimated_motion = submaps[pending.source]->T_world_origin.inverse() * T_world_current;
+      if (source_displacement(current, implied_motion, estimated_motion) < basin) {
+        pending.confirmations++;
+        hypothesis.confirmations++;
+      } else {
+        pending.rejected = true;
+      }
+    }
+  }
+
+  std::vector<LoopHypothesis> remaining;
+  for (auto& pending : pending_loops_) {
+    if (pending.rejected) {
+      logger->debug("loop hypothesis ({}, {}) rejected by temporal consistency", pending.representative, pending.source);
+    } else if (pending.confirmations >= params.loop_consistency_submaps) {
+      factors->add(*confirm_loop(pending));
+    } else if (current - pending.source < params.loop_consistency_submaps) {
+      remaining.push_back(pending);
+    }
+  }
+
+  for (auto& hypothesis : hypotheses) {
+    // Two agreeing registrations confirm an in-basin revisit immediately
+    if (hypothesis.in_basin && hypothesis.confirmations >= 1) {
+      factors->add(*confirm_loop(hypothesis));
+    } else if (hypothesis.confirmations >= params.loop_consistency_submaps) {
+      factors->add(*confirm_loop(hypothesis));
+    } else {
+      remaining.push_back(hypothesis);
+    }
+  }
+  pending_loops_ = std::move(remaining);
+
+  return factors;
+}
+
+std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost_factors(int current) {
   auto factors = std::make_shared<gtsam::NonlinearFactorGraph>();
   if (current == 0) {
     return factors;
@@ -526,6 +723,7 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost
   double previous_overlap = 0.0;
   double squared_max_implicit_loop_distance = params.max_implicit_loop_distance * params.max_implicit_loop_distance;
 
+  std::vector<std::pair<int, double>> candidates;
   for (int i = 0; i < current; i++) {
     const double squared_dist = (submaps[i]->T_world_origin.translation() - current_submap->T_world_origin.translation()).squaredNorm();
     if (squared_dist > squared_max_implicit_loop_distance) {
@@ -540,34 +738,14 @@ std::shared_ptr<gtsam::NonlinearFactorGraph> GlobalMapping::create_matching_cost
       continue;
     }
 
-    // For non-recent pairs (loop closures), use lightweight BetweenFactor instead of heavy matching cost factor
-    const bool use_between = params.matching_cost_factor_window >= 0 && (current - i) > params.matching_cost_factor_window;
-    if (use_between) {
-      logger->debug("loop closure ({}, {}): using BetweenFactor (dist={})", i, current, current - i);
-      factors->add(*align_and_create_between_factor(i, current));
-      continue;
-    }
+    candidates.emplace_back(i, overlap);
+  }
 
-    if (params.registration_error_factor_type == "VGICP") {
-      for (const auto& voxelmap : submaps[i]->voxelmaps) {
-        factors->emplace_shared<gtsam_points::IntegratedVGICPFactor>(X(i), X(current), voxelmap, subsampled_submaps[current]);
-      }
-    }
-    else if (params.registration_error_factor_type == "EPCD_GICP") {
-      factors->add(create_epcd_factor(i, current));
-    }
-#ifdef GTSAM_POINTS_USE_CUDA
-    else if (params.registration_error_factor_type == "VGICP_GPU") {
-      const auto stream_buffer = std::any_cast<std::shared_ptr<gtsam_points::StreamTempBufferRoundRobin>>(stream_buffer_roundrobin)->get_stream_buffer();
-      const auto& stream = stream_buffer.first;
-      const auto& buffer = stream_buffer.second;
-      for (const auto& voxelmap : submaps[i]->voxelmaps) {
-        factors->emplace_shared<gtsam_points::IntegratedVGICPFactorGPU>(X(i), X(current), voxelmap, subsampled_submaps[current], stream, buffer);
-      }
-    }
-#endif
-    else {
-      logger->warn("unknown registration error type ({})", params.registration_error_factor_type);
+  if (params.enable_loop_verification) {
+    factors->add(*create_verified_loop_factors(current, candidates));
+  } else {
+    for (const auto& candidate : candidates) {
+      factors->add(*create_registration_factors(candidate.first, current));
     }
   }
 
@@ -588,9 +766,10 @@ void GlobalMapping::update_submaps() {
   }
 }
 
-gtsam_points::ISAM2ResultExt GlobalMapping::update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values) {
+gtsam_points::ISAM2ResultExt GlobalMapping::update_isam2(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values, const gtsam::FactorIndices& remove_indices) {
   gtsam::NonlinearFactorGraph factors = new_factors;
   gtsam::Values values = new_values;
+  gtsam::FactorIndices removes = remove_indices;
   std::unordered_set<gtsam::Key> damped_keys;
 
   while (true) {
@@ -601,7 +780,7 @@ gtsam_points::ISAM2ResultExt GlobalMapping::update_isam2(const gtsam::NonlinearF
       auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
       arena->execute([&] {
 #endif
-        result = isam2->update(factors, values);
+        result = isam2->update(factors, values, removes);
 #ifdef GTSAM_USE_TBB
       });
 #endif
@@ -635,6 +814,7 @@ gtsam_points::ISAM2ResultExt GlobalMapping::update_isam2(const gtsam::NonlinearF
 
     values = isam2->getLinearizationPoint();
     factors = isam2->getFactorsUnsafe();
+    removes.clear();
     if (!damping_failed) {
       factors.emplace_shared<gtsam_points::LinearDampingFactor>(indeterminant_nearby_key, 6, 1e3);
     }

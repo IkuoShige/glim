@@ -56,6 +56,9 @@
 
 ### Global mapping
 - **min_implicit_loop_overlap** (default 0.2) : Minimum overlap rate to create registration error factor.
+- **enable_loop_verification** (default false) : Register each revisit (a run of overlapping past submaps that are not the ones just traversed) coarse-to-fine before creating registration error factors. If the current estimate is outside the convergence basin of the factors, a BetweenFactor from the registration pulls it in once later submaps agree with it, and is replaced with registration error factors when the revisit is in the basin. Without it, an out-of-basin revisit gets registration error factors at a wrong local minimum.
+- **loop_coarse_levels** (default 4) : Number of coarse-to-fine registration stages. Stage k uses a correspondence distance of epcd_max_correspondence_distance x 2^k.
+- **loop_consistency_submaps** (default 2) : Number of agreeing registrations required before a loop correction is inserted.
 - **epcd_eager_coreset_extraction** (default false) : Extract the EPCD coreset right after full sampling instead of at the next linearization. The linearization results are the same; it releases the sampled features, which global mapping would otherwise keep for most factors.
 
 ### Common parameters for sub and global mapping
