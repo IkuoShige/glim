@@ -30,6 +30,7 @@ struct ExactGICPFactorParams {
   double deferred_sampling_rotation = 0.25 * M_PI / 180.0;
   double rebuild_translation = 1.0;
   double rebuild_rotation = 1.0 * M_PI / 180.0;
+  bool eager_coreset_extraction = false;
 
   /// @brief Read "epcd_*" parameters of the given config module except for num_threads.
   static ExactGICPFactorParams load(const Config& config, const std::string& module);
@@ -84,6 +85,9 @@ public:
     rebuild_translation = translation;
     rebuild_rotation = rotation;
   }
+  /// @brief Extract the coreset right after the full sampling instead of keeping the sampled features until the next linearization.
+  ///        Linearization results are the same as deferred sampling; only the extraction cost is traded for memory.
+  void set_eager_coreset_extraction(bool enable) { eager_coreset_extraction = enable; }
 
   double inlier_fraction() const;
   /// @brief Number of points in the current coreset (0 if no coreset has been extracted)
@@ -128,6 +132,7 @@ private:
   double deferred_sampling_rotation = 0.25 * M_PI / 180.0;
   double rebuild_translation = 1.0;
   double rebuild_rotation = 1.0 * M_PI / 180.0;
+  bool eager_coreset_extraction = false;
 
   gtsam_points::PointCloud::ConstPtr target;
   gtsam_points::PointCloud::ConstPtr source;

@@ -23,6 +23,7 @@
     "epcd_deferred_sampling_rotation": 0.004363323129985824,
     "epcd_rebuild_translation": 1.0,
     "epcd_rebuild_rotation": 0.017453292519943295,
+    "epcd_eager_coreset_extraction": true,
     "max_implicit_loop_distance": 100.0,
     "min_implicit_loop_overlap": 0.1,
     "matching_cost_factor_window": 3,
