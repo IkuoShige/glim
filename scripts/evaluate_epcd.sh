@@ -4,12 +4,12 @@ set -euo pipefail
 # EPCD GLIM Evaluation Script
 # Usage: ./evaluate_epcd.sh [config_path] [dump_path]
 
-CONFIG_PATH="${1:-/root/ros2_ws/src/glim/config/epcd_livox_cpu}"
+WS="${WS:-/root/ros2_ws}"
+CONFIG_PATH="${1:-${WS}/src/glim/config/epcd_livox_budget}"
 DUMP_PATH="${2:-/tmp/glim_epcd_eval_$(date +%Y%m%d_%H%M%S)}"
-GT_PATH="/root/ros2_ws/src/gt/traj_lidar_outdoor_hard_01.txt"
-BAG1="/root/ros2_ws/src/outdoor_hard_01a"
-BAG2="/root/ros2_ws/src/outdoor_hard_01b"
-WS="/root/ros2_ws"
+GT_PATH="${GT_PATH:-${WS}/src/gt/traj_lidar_outdoor_hard_01.txt}"
+BAG1="${BAG1:-${WS}/src/outdoor_hard_01a}"
+BAG2="${BAG2:-${WS}/src/outdoor_hard_01b}"
 RESULT_JSON="${DUMP_PATH}/eval_result.json"
 
 echo "=========================================="

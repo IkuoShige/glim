@@ -128,13 +128,13 @@ TBBありの場合:
 #define GTSAM_ALLOCATOR_TBB
 ```
 
-## 4. gtsam_points 1.2.0
+## 4. gtsam_points 1.2.2
 
 ```bash
 cd /root
 git clone https://github.com/koide3/gtsam_points.git
 cd gtsam_points
-git checkout 11af1e6  # v1.2.0相当
+git checkout 8e94654  # v1.2.2以降 (glim最新版が要求)
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
@@ -158,11 +158,11 @@ sudo ldconfig
 grep "GTSAM_POINTS_USE_TBB\|GTSAM_POINTS_USE_OPENMP" /usr/local/include/gtsam_points/config.hpp
 ```
 
-## 5. Iridescence 0.1.6 (viewer用)
+## 5. Iridescence 1.0.3以降 (viewer用)
 
 ```bash
 cd /root
-git clone https://github.com/koide3/iridescence.git
+git clone --recursive https://github.com/koide3/iridescence.git
 cd iridescence && mkdir -p build && cd build
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \

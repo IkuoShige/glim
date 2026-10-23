@@ -176,7 +176,8 @@ void fast_caratheodory(
       }
     }
 
-    int points_per_cluster = std::max(1, cluster_bounds.back() - cluster_bounds[k - 1]);
+    // The largest cluster size bounds the number of points kept per cluster
+    const int points_per_cluster = (static_cast<int>(P.cols()) + k - 1) / k;
     int reduced_cluster_num = P.rows() + 1;
     if (reduced_cluster_num * points_per_cluster < target_num) {
       reduced_cluster_num = std::max(1, target_num / points_per_cluster);
@@ -358,6 +359,10 @@ size_t ExactGICPFactor::memory_usage() const {
 
 double ExactGICPFactor::inlier_fraction() const {
   return last_num_evaluated > 0 ? static_cast<double>(last_num_inliers) / last_num_evaluated : 0.0;
+}
+
+int ExactGICPFactor::coreset_size() const {
+  return coreset_cache->has_coreset ? coreset_cache->selected_source_indices.size() : 0;
 }
 
 void ExactGICPFactor::update_correspondences(const Eigen::Isometry3d&) const {}
