@@ -1,5 +1,47 @@
 ![GLIM](docs/assets/logo2.png "GLIM Logo")
 
+## Quick Start (EPCD fork, CPU)
+
+This fork adds the EPCD exact GICP factor and verified implicit loop closure. It needs **GTSAM 4.3a0**, plus **gtsam_points** and **Iridescence** from their current master. The gtsam_points v1.2.2 tag is not enough, because GLIM uses `has_index`, which was added after it. Tested with gtsam_points 8e94654 and Iridescence 6f451b1. gtsam_points 1.2.0 fails with `gtsam_points/util/gtsam_migration.hpp: No such file or directory`, and an older Iridescence fails in the viewer with `no member named 'enable_backface_culling'`.
+
+Every package defaults to `RelWithDebInfo`, so pass `Release` to each build.
+
+```bash
+sudo apt install libomp-dev libboost-all-dev libmetis-dev \
+                 libfmt-dev libspdlog-dev libglm-dev libglfw3-dev libpng-dev libjpeg-dev
+
+git clone https://github.com/borglab/gtsam && cd gtsam && git checkout 4.3a0
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DGTSAM_BUILD_TESTS=OFF \
+      -DGTSAM_WITH_TBB=OFF -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF
+cmake --build build -j$(nproc) && sudo cmake --install build && cd ..
+
+git clone https://github.com/koide3/iridescence --recursive && cd iridescence
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc) && sudo cmake --install build && cd ..
+
+git clone https://github.com/koide3/gtsam_points && cd gtsam_points
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_OPENMP=ON -DBUILD_WITH_CUDA=OFF
+cmake --build build -j$(nproc) && sudo cmake --install build && cd ..
+
+sudo ldconfig
+
+mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
+git clone -b main https://github.com/IkuoShige/glim
+git clone https://github.com/koide3/glim_ros2
+cd ~/ros2_ws
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_CUDA=OFF
+```
+
+Run on a Livox bag (`/livox/lidar`, `/livox/imu`) with the EPCD preset. `OMP_WAIT_POLICY=PASSIVE` keeps idle OpenMP threads from spinning, which made EPCD odometry about 1.6x faster in our tests.
+
+```bash
+source ~/ros2_ws/install/setup.bash
+OMP_WAIT_POLICY=PASSIVE ros2 run glim_ros glim_rosbag /path/to/rosbag \
+  --ros-args -p config_path:=$(ros2 pkg prefix glim)/share/glim/config/epcd_livox_budget
+```
+
+Keep `-march=native` off unless GTSAM, gtsam_points, and GLIM are all built with it; mixing them breaks Eigen alignment.
+
 ## Introduction
 
 **GLIM** is a versatile and extensible range-based 3D mapping framework.
