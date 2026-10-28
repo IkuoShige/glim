@@ -2,9 +2,7 @@
 
 ## Quick Start (EPCD fork, CPU)
 
-This fork adds the EPCD exact GICP factor and verified implicit loop closure. It needs **GTSAM 4.3a0**, plus **gtsam_points** and **Iridescence** from their current master. The gtsam_points v1.2.2 tag is not enough, because GLIM uses `has_index`, which was added after it. Tested with gtsam_points 8e94654 and Iridescence 6f451b1. gtsam_points 1.2.0 fails with `gtsam_points/util/gtsam_migration.hpp: No such file or directory`, and an older Iridescence fails in the viewer with `no member named 'enable_backface_culling'`.
-
-Every package defaults to `RelWithDebInfo`, so pass `Release` to each build.
+The fastest build we measured on a CPU-only machine: `Release` for every package, OpenMP parallelism, no `-march=native`. How it works and what differs from the papers: [docs/epcd_cpu.md](docs/epcd_cpu.md).
 
 ```bash
 sudo apt install libomp-dev libboost-all-dev libmetis-dev \
@@ -32,15 +30,11 @@ cd ~/ros2_ws
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_CUDA=OFF
 ```
 
-Run on a Livox bag (`/livox/lidar`, `/livox/imu`) with the EPCD preset. `OMP_WAIT_POLICY=PASSIVE` keeps idle OpenMP threads from spinning, which made EPCD odometry about 1.6x faster in our tests.
-
 ```bash
 source ~/ros2_ws/install/setup.bash
 OMP_WAIT_POLICY=PASSIVE ros2 run glim_ros glim_rosbag /path/to/rosbag \
   --ros-args -p config_path:=$(ros2 pkg prefix glim)/share/glim/config/epcd_livox_budget
 ```
-
-Keep `-march=native` off unless GTSAM, gtsam_points, and GLIM are all built with it; mixing them breaks Eigen alignment.
 
 ## Introduction
 
